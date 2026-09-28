@@ -7,6 +7,7 @@ const TCH = 400; // trozos de árboles
 const TAU = Math.PI * 2;
 const angDiff = (a, b) => { let d = (b - a) % TAU; if (d > Math.PI) d -= TAU; if (d < -Math.PI) d += TAU; return d; };
 
+const TILES = ['#b5553a', '#a64b32', '#c0643f', '#9c4a35', '#b86b4b'];
 const WALLS = ['#e8dcc8', '#d9c7a8', '#cfc3b3', '#e6d2b5', '#c9b49a', '#ddd4c6', '#bfae9a', '#e3c9a8', '#d8b9a0', '#f0e6d6'];
 const Y = { ground: 0, water: 0.02, area: 0.04, plaza: 0.05, rail: 0.07, path: 0.08, sidewalk: 0.1, road: 0.14, line: 0.17 };
 
@@ -212,18 +213,25 @@ class Renderer3D {
     if ((bd.bb[2] - bd.bb[0]) * (bd.bb[3] - bd.bb[1]) > 400000) return;
     const kind = (this.w.map.bk && this.w.map.bk[i]) || '';
     const r1 = hash(i + 3), r2 = hash(i + 11), r3 = hash(i + 7);
-    if (!h) h = { house: 7, shed: 3.5, industrial: 9, church: 16, school: 10.5, commercial: 8, public: 12.5 }[kind] || 9 + Math.floor(r1 * 4) * 3.1;
+    const area = (this.w.map.binfo && this.w.map.binfo[i] && this.w.map.binfo[i].area) || 200;
+    if (!h) {
+      if (kind === 'house') h = area < 70 && r1 < 0.5 ? 3.4 : r1 < 0.8 ? 6.4 : 9.3; // 1, 2 o 3 plantas
+      else if (kind === 'lowres') h = r1 < 0.55 ? 6.4 : 9.4;
+      else h = { shed: 3.2, industrial: 9, church: 16, school: 10.5, commercial: 8, public: 12.5, construction: 2.6, ruins: 2.4 }[kind] || 9.3 + Math.floor(r1 * 4) * 3.1;
+    }
     this.bHeight[i] = h;
     let upper, ground = null;
     if (kind === 'church') upper = 'stone';
     else if (kind === 'school') upper = 'school';
     else if (kind === 'industrial') upper = 'industrial';
-    else if (kind === 'house') upper = 'house';
-    else if (kind === 'shed') upper = 'plaster';
+    else if (kind === 'house') upper = ['house', 'house', 'classic', 'blind', 'plaster'][Math.floor(r1 * 5)];
+    else if (kind === 'lowres') upper = ['classic', 'blind', 'brick', 'plaster', 'balcony'][Math.floor(r1 * 5)];
+    else if (kind === 'shed' || kind === 'construction' || kind === 'ruins') upper = 'plaster';
     else if (kind === 'commercial' || kind === 'public') upper = r1 < 0.6 ? 'modern' : 'brick';
     else upper = ['classic', 'balcony', 'brick', 'brick', 'brickBalcony', 'blind', 'blind', 'plaster', 'modern', 'balcony'][Math.floor(r1 * 10)];
     if ((kind === '' || kind === 'commercial') && h > 6)
       ground = ['shopRed', 'shopGreen', 'shopBlue', 'shopOrange', 'shutter1', 'shutter2', 'shutter1', 'door', 'door', 'garage'][Math.floor(r2 * 10)];
+    else if ((kind === 'house' || kind === 'lowres') && h > 5) ground = ['door', 'door', 'garage', 'door'][Math.floor(r2 * 4)];
     const tintC = (key) => this.atlas.tint[key] ? col(WALLS[Math.floor(r3 * WALLS.length)]) : new THREE.Color().setScalar(0.9 + r3 * 0.1);
     const upC = tintC('u_' + upper);
     const upCell = this.atlas.cells['u_' + upper], gCell = ground ? this.atlas.cells['g_' + ground] : null;
@@ -238,7 +246,7 @@ class Renderer3D {
     const y0 = base - 0.8, top = base + h;
     const gh = ground ? base + Math.min(3.8, h) : base;
     const floorH = kind === 'industrial' || kind === 'shed' ? h : kind === 'church' ? 5 : 3.1;
-    const floors = Math.max(1, Math.round((h - gh) / floorH));
+    const floors = Math.max(1, Math.round((top - gh) / floorH));
     const ub = B.get(cx, cz, 'wall'), gb = ground ? ub : null;
     const gC = ground ? tintC('g_' + ground) : null;
     for (let k = 0; k < n; k++) {
@@ -263,14 +271,43 @@ class Renderer3D {
     }
     const pts = [];
     for (let k = 0; k < n; k++) pts.push(new THREE.Vector2(p[k * 2], p[k * 2 + 1]));
+    // casas: tejado de teja a cuatro aguas
+    if (kind === 'house' && n >= 3 && n <= 10 && this.hipRoof(B.get(cx, cz, 'roof'), pts, top, col(TILES[Math.floor(r2 * TILES.length)]))) return;
     let tris;
     try { tris = THREE.ShapeUtils.triangulateShape(pts, []); } catch (e) { return; }
-    const roofC = col(kind === 'church' ? '#9a5b43' : kind === 'industrial' ? '#8d9499' : bd.color);
+    const roofC = col(kind === 'church' ? '#9a5b43' : kind === 'industrial' ? '#8d9499' : kind === 'construction' ? '#9b9689' : bd.color);
     const rb = B.get(cx, cz, 'roof');
     for (const t of tris) {
       const a = pts[t[0]], b2 = pts[t[1]], d = pts[t[2]];
       pushTri(rb, a.x, top, a.y, b2.x, top, b2.y, d.x, top, d.y, roofC);
     }
+  }
+
+  // Tejado a cuatro aguas (o piramidal si la planta es casi cuadrada) sobre el rectángulo orientado de la planta
+  hipRoof(rb, pts, top, c) {
+    // eje principal = lado más largo
+    let best = 0, ux = 1, uy = 0;
+    for (let k = 0; k < pts.length; k++) {
+      const a = pts[k], b = pts[(k + 1) % pts.length], L = Math.hypot(b.x - a.x, b.y - a.y);
+      if (L > best) { best = L; ux = (b.x - a.x) / L; uy = (b.y - a.y) / L; }
+    }
+    const vx = -uy, vy = ux;
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    for (const q of pts) { const u = q.x * ux + q.y * uy, v = q.x * vx + q.y * vy; u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); }
+    const W = v1 - v0, L = u1 - u0;
+    if (W < 2 || L < 2) return false;
+    const rh = Math.min(3.2, W * 0.42), vm = (v0 + v1) / 2;
+    const ra = Math.min(u0 + W / 2, (u0 + u1) / 2), rbU = Math.max(u1 - W / 2, (u0 + u1) / 2);
+    const R = (u) => [ux * u + vx * vm, uy * u + vy * vm];
+    const R1 = R(ra), R2 = R(rbU), mid = (u0 + u1) / 2, yT = top + rh;
+    for (let k = 0; k < pts.length; k++) {
+      const a = pts[k], b = pts[(k + 1) % pts.length];
+      const ua = a.x * ux + a.y * uy, ub = b.x * ux + b.y * uy;
+      const ea = ua < mid ? R1 : R2, eb = ub < mid ? R1 : R2;
+      pushTri(rb, a.x, top, a.y, b.x, top, b.y, eb[0], yT, eb[1], c);
+      if (ea !== eb) pushTri(rb, a.x, top, a.y, eb[0], yT, eb[1], ea[0], yT, ea[1], c);
+    }
+    return true;
   }
 
   // ---------- letreros: placas de calle y tiendas reales de OSM ----------

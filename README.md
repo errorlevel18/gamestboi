@@ -27,6 +27,7 @@ veces arranca al momento. Si no hay conexión, puedes jugar con un mapa aproxima
 | Robar un coche / bajar | `E` |
 | Claxon | `H` |
 | Cambiar cámara 3D / desde arriba | `C` |
+| ¿Qué hay aquí en OpenStreetMap? | `I` (o botón ℹ️) |
 | Mapa completo | `M` |
 | Pausa | `P` o `Esc` |
 
@@ -51,6 +52,9 @@ En el móvil salen un joystick y unos botones táctiles.
   con parada en la estación. Si OSM apenas tiene farolas en la zona, se colocan a lo largo de las calles.
 - **Modelos 3D:** coches con silueta real (compacto, berlina, furgoneta, deportivo, taxi, patrulla, bus),
   ruedas que giran, y personas articuladas que andan y corren.
+- **Casas:** los edificios de OSM sin tipo ni plantas se interpretan por su tamaño (pequeño = casa de 1-3
+  plantas con tejado de teja, mediano = bloque bajo, grande = bloque de pisos). Con `I` / ℹ️ ves qué dice
+  OSM del edificio que tienes delante y un enlace para corregirlo en openstreetmap.org.
 - **Fachadas variadas:** ladrillo visto, balcones, persianas, bajos con tiendas o persianas metálicas con grafitis,
   naves industriales, iglesias de piedra y colegios, según el tipo de edificio en OSM. La altura sale de las plantas
   (`building:levels`) del edificio o de sus partes del Catastro.

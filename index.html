@@ -69,6 +69,13 @@
   #pause p { font-size: 14px; font-style: normal; font-weight: 400; }
   #cam { position: absolute; right: 60px; bottom: 22px; pointer-events: auto; background: rgba(0,0,0,.5); border: 1px solid #555; color: #fff;
     border-radius: 6px; padding: 4px 8px; font-size: 16px; cursor: pointer; }
+  #infoBtn { position: absolute; right: 106px; bottom: 22px; pointer-events: auto; background: rgba(0,0,0,.5); border: 1px solid #555; color: #fff;
+    border-radius: 6px; padding: 4px 8px; font-size: 16px; cursor: pointer; }
+  #info { display: none; position: absolute; left: 50%; top: 90px; transform: translateX(-50%); width: min(520px, 92vw); pointer-events: auto;
+    background: rgba(12,12,20,.92); border: 1px solid #555; border-left: 5px solid var(--gold); border-radius: 6px; padding: 12px 36px 12px 14px; font-size: 14px; line-height: 1.5; }
+  #info a { color: #8fd3ff; } #info code { background: #2d2640; padding: 0 4px; border-radius: 3px; }
+  #info .small { margin-top: 8px; font-size: 12px; opacity: .8; }
+  #infoClose { position: absolute; right: 6px; top: 6px; background: none; border: 0; color: #fff; font-size: 18px; cursor: pointer; }
   #mute { position: absolute; right: 14px; bottom: 22px; pointer-events: auto; background: rgba(0,0,0,.5); border: 1px solid #555; color: #fff;
     border-radius: 6px; padding: 4px 8px; font-size: 16px; cursor: pointer; }
 
@@ -116,6 +123,8 @@
   <div id="pause">PAUSA<p>Pulsa P o Esc para continuar</p></div>
   <button id="mute" title="Sonido">🔊</button>
   <button id="cam" title="Cambiar cámara (C)">📷</button>
+  <button id="infoBtn" title="¿Qué hay aquí en OpenStreetMap? (I)">ℹ️</button>
+  <div id="info"><button id="infoClose" title="Cerrar">✕</button><div id="infoBody"></div></div>
 </div>
 
 <div id="touch">
@@ -133,13 +142,14 @@
     <div id="status">Cargando…</div>
     <button class="btn" id="play" disabled>Jugar</button><br>
     <button class="btn small" id="skip" style="display:none">Probar otro servidor</button>
+    <button class="btn small" id="retry" style="display:none">Reintentar</button>
     <button class="btn small" id="reload">Volver a descargar el mapa</button>
     <button class="btn small" id="offline">Jugar sin conexión (mapa aproximado)</button>
     <label class="btn small" style="cursor:pointer">Cargar JSON de Overpass<input type="file" id="file" accept=".json,application/json" hidden></label>
     <div class="controls">
       <b>A pie:</b> <kbd>WASD</kbd>/<kbd>flechas</kbd> moverse · <kbd>Shift</kbd> correr · <kbd>Espacio</kbd> disparar<br>
       <b>En coche:</b> <kbd>W</kbd> acelerar · <kbd>S</kbd> frenar/marcha atrás · <kbd>A</kbd><kbd>D</kbd> girar · <kbd>Espacio</kbd> freno de mano · <kbd>H</kbd> claxon<br>
-      <kbd>E</kbd> robar coche / bajar · <kbd>C</kbd> cámara 3D / desde arriba · <kbd>M</kbd> mapa · <kbd>P</kbd> pausa<br>
+      <kbd>E</kbd> robar coche / bajar · <kbd>C</kbd> cámara 3D / desde arriba · <kbd>I</kbd> qué hay aquí en OSM · <kbd>M</kbd> mapa · <kbd>P</kbd> pausa<br>
       En 3D a pie, <kbd>A</kbd><kbd>D</kbd> giran y <kbd>W</kbd><kbd>S</kbd> avanzan.<br>
       Pisa los círculos verdes <b style="color:#35d46a">M</b> para empezar misiones.
     </div>
@@ -147,17 +157,17 @@
 </div>
 <div class="osm">Mapa © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a></div>
 
-<script src="js/data.js?v=10"></script>
-<script src="js/elevation-data.js?v=10"></script>
-<script src="js/terrain.js?v=10"></script>
-<script src="js/world.js?v=10"></script>
-<script src="js/city.js?v=10"></script>
-<script src="js/vendor/three.min.js?v=10"></script>
-<script src="js/facades.js?v=10"></script>
-<script src="js/models.js?v=10"></script>
-<script src="js/render3d.js?v=10"></script>
-<script src="js/audio.js?v=10"></script>
-<script src="js/game.js?v=10"></script>
-<script src="js/main.js?v=10"></script>
+<script src="js/data.js?v=11"></script>
+<script src="js/elevation-data.js?v=11"></script>
+<script src="js/terrain.js?v=11"></script>
+<script src="js/world.js?v=11"></script>
+<script src="js/city.js?v=11"></script>
+<script src="js/vendor/three.min.js?v=11"></script>
+<script src="js/facades.js?v=11"></script>
+<script src="js/models.js?v=11"></script>
+<script src="js/render3d.js?v=11"></script>
+<script src="js/audio.js?v=11"></script>
+<script src="js/game.js?v=11"></script>
+<script src="js/main.js?v=11"></script>
 </body>
 </html>

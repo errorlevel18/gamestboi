@@ -96,6 +96,42 @@ class Game {
     try { localStorage.setItem('santboi-view', this.view3d ? '3d' : '2d'); } catch (e) { /* nada */ }
   }
 
+  // Qué hay en OpenStreetMap delante del jugador (para comprobar y corregir el mapa)
+  showInfo() {
+    const P = this.pos(), w = this.w;
+    const a = this.view3d && this.r3d && this.r3d.yaw != null ? this.r3d.yaw : (this.player.car ? this.player.car.a : this.player.a);
+    let b = null, at = null;
+    for (let d = 0; d <= 30 && !b; d += 1) {
+      const x = P.x + Math.cos(a) * d, y = P.y + Math.sin(a) * d;
+      b = w.buildingAt(x, y); at = { x, y };
+    }
+    if (!b) { // el más cercano alrededor
+      let bd = 15 * 15;
+      for (const c of w.buildingsNear(P.x, P.y, 15)) {
+        const cx = (c.bb[0] + c.bb[2]) / 2, cy = (c.bb[1] + c.bb[3]) / 2, d = (cx - P.x) ** 2 + (cy - P.y) ** 2;
+        if (d < bd) { bd = d; b = c; }
+      }
+    }
+    const el = document.getElementById('info'), body = document.getElementById('infoBody');
+    const ll = SB.toLatLon(at ? at.x : P.x, at ? at.y : P.y);
+    const mapLink = `https://www.openstreetmap.org/query?lat=${ll.lat.toFixed(6)}&lon=${ll.lon.toFixed(6)}#map=19/${ll.lat.toFixed(6)}/${ll.lon.toFixed(6)}`;
+    const street = w.streetNameAt(P.x, P.y);
+    const KIND = { house: 'casa', lowres: 'bloque bajo', church: 'iglesia', school: 'escuela', industrial: 'nave industrial', shed: 'garaje / cobertizo',
+      commercial: 'comercial / oficinas', public: 'edificio público', construction: 'en obras', ruins: 'ruinas', '': 'bloque de pisos' };
+    let html;
+    if (b && w.map.binfo && w.map.binfo[b.i]) {
+      const inf = w.map.binfo[b.i], kind = (w.map.bk && w.map.bk[b.i]) || '';
+      const hGame = this.r3d && this.r3d.bHeight[b.i] ? Math.round(this.r3d.bHeight[b.i] * 10) / 10 : null;
+      html = `<b>Edificio de OpenStreetMap</b> <a href="https://www.openstreetmap.org/way/${inf.id}" target="_blank" rel="noopener">way/${inf.id}</a><br>
+        building=<code>${inf.b}</code>${inf.lv ? ` · plantas=<code>${inf.lv}</code>` : ''}${inf.hgt ? ` · altura=<code>${inf.hgt}</code>` : ''}${inf.name ? ` · «${inf.name}»` : ''}<br>
+        Superficie: ${inf.area} m² · En el juego: <b>${KIND[kind] || kind}</b>${inf.guessed ? ' (deducido por el tamaño, OSM no dice el tipo)' : ''}${hGame ? `, ${hGame} m de alto` : ''}<br>`;
+    } else html = `<b>No hay ningún edificio de OpenStreetMap aquí delante.</b><br>`;
+    html += `${street ? 'Calle: ' + street + '<br>' : ''}<a href="${mapLink}" target="_blank" rel="noopener">Ver este punto en openstreetmap.org</a>
+      <div class="small">Si algo no coincide con la realidad (una casa que ya no existe, un solar vacío, plantas mal puestas), puedes corregirlo en OpenStreetMap con tu cuenta. Después pulsa «Volver a descargar el mapa» en la pantalla de inicio.</div>`;
+    body.innerHTML = html;
+    el.style.display = 'block';
+  }
+
   msg(text, dur = 3, big = false) { this.msgs.push({ text, t: dur, big }); }
 
   // ---------- utilidades de spawn ----------
@@ -279,6 +315,7 @@ class Game {
     this.lastDt = dt;
     if (this.pressed.KeyM) this.showMap = !this.showMap;
     if (this.pressed.KeyC || this.pressed.KeyV) this.setView(!this.view3d);
+    if (this.pressed.KeyI) this.showInfo();
     if (this.pressed.KeyP || this.pressed.Escape) this.paused = !this.paused;
     if (this.paused) { this.pressed = {}; return; }
 

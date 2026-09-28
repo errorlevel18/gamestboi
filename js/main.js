@@ -21,10 +21,11 @@ function ready(m, note) {
 
 async function load(force) {
   playBtn.disabled = true;
+  $('retry').style.display = 'none';
   if (!force) {
     const cached = await SB.loadCachedMap();
     if (cached) { ready(cached, 'Mapa de Sant Boi (guardado)'); return; }
-  } else await SB.clearCachedMap();
+  } else await SB.clearCachedMap(true);
   try {
     const m = await SB.downloadMap((t, busy) => { setStatus(t); showSkip(!!busy); });
     showSkip(false);
@@ -32,11 +33,13 @@ async function load(force) {
     ready(m, 'Mapa de Sant Boi descargado' + (m.skipped && m.skipped.length ? ` (sin ${m.skipped.join(', ')}: pulsa "Volver a descargar" más tarde)` : ''));
   } catch (e) {
     showSkip(false);
-    setStatus('No se pudo descargar el mapa de OpenStreetMap (' + e.message + '). Lo ya descargado se ha guardado: pulsa "Volver a descargar el mapa" para continuar, o juega con el mapa aproximado.', true);
+    setStatus('No se pudo descargar el mapa de OpenStreetMap (' + e.message + '). Lo ya descargado se ha guardado: pulsa «Reintentar» para seguir donde se quedó, o juega con el mapa aproximado.', true);
+    $('retry').style.display = 'inline-block';
   }
 }
 
 $('reload').onclick = () => load(true);
+$('retry').onclick = () => load(false);
 $('offline').onclick = () => ready(SB.fallbackMap(), 'Sin conexión');
 $('file').onchange = async (ev) => {
   const f = ev.target.files[0]; if (!f) return;
@@ -141,6 +144,8 @@ hold($('tEnter'), () => { game.pressed.KeyE = true; });
 hold($('tMap'), () => { game.pressed.KeyM = true; });
 hold($('tCam'), () => { game.pressed.KeyC = true; });
 $('cam').onclick = () => { if (game) game.pressed.KeyC = true; };
+$('infoBtn').onclick = () => { if (game) game.showInfo(); };
+$('infoClose').onclick = () => { $('info').style.display = 'none'; };
 
 load(false);
 })();

@@ -12,7 +12,8 @@ const MIRRORS = [
   'https://overpass.private.coffee/api/interpreter',
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ];
-const CACHE_KEY = 'santboi-map-v5';
+const CACHE_KEY = 'santboi-map-v6';   // mapa ya procesado (cambia cuando cambia cómo se interpreta)
+const RAW_KEY = 'santboi-raw-v1';     // datos en bruto de Overpass (sólo cambia si cambian las consultas)
 
 // La descarga se hace por partes: consultas pequeñas que el servidor no corta por tiempo.
 // "essential": sin esa parte no se puede jugar; las demás se pueden saltar si fallan.
@@ -153,8 +154,16 @@ function buildingKind(t) {
   if (b === 'house' || b === 'detached' || b === 'semidetached_house' || b === 'terrace' || b === 'bungalow') return 'house';
   if (b === 'garage' || b === 'garages' || b === 'shed' || b === 'roof' || b === 'hut' || b === 'kiosk') return 'shed';
   if (b === 'retail' || b === 'supermarket' || b === 'commercial' || b === 'office') return 'commercial';
+  if (b === 'construction') return 'construction';
+  if (b === 'ruins') return 'ruins';
   if (a === 'townhall' || b === 'public' || b === 'civic' || b === 'government' || a === 'hospital' || b === 'hospital' || b === 'sports_hall' || b === 'stadium') return 'public';
   return '';
+}
+
+function polyArea(p) {
+  let a = 0;
+  for (let i = 0, j = p.length - 2; i < p.length; j = i, i += 2) a += (p[j] + p[i]) * (p[j + 1] - p[i + 1]);
+  return Math.abs(a / 2);
 }
 
 // Altura del edificio en metros (0 = desconocida)
@@ -207,7 +216,7 @@ function assembleRings(members) {
 
 // Convierte la respuesta de Overpass en el formato interno del juego
 SB.processOSM = function (osm) {
-  const map = { roads: [], buildings: [], areas: [], waterLines: [], rails: [], pois: [], places: [], bh: [], bk: [], shops: [], trees: [], source: 'osm',
+  const map = { roads: [], buildings: [], areas: [], waterLines: [], rails: [], pois: [], places: [], bh: [], bk: [], binfo: [], shops: [], trees: [], source: 'osm',
     signals: [], crossNodes: [], crossWays: [], busStops: [], lamps: [], furniture: [], busRoutes: [] };
   const parts = [];
   const centroid = (pts) => { let cx = 0, cy = 0; const n = pts.length / 2; for (let i = 0; i < pts.length; i += 2) { cx += pts[i]; cy += pts[i + 1]; } return [cx / n, cy / n]; };
@@ -269,9 +278,19 @@ SB.processOSM = function (osm) {
       continue;
     }
     if (t.building && closed) {
+      if (t.building === 'no' || t.building === 'demolished' || t.building === 'razed' || t.building === 'proposed') continue;
+      let kind = buildingKind(t);
+      const h = buildingHeight(t), area = polyArea(pts);
+      // sin datos de tipo ni de plantas: lo pequeño es una casa y lo mediano un bloque bajo
+      let guessed = false;
+      if (!kind && !h) {
+        if (area < 170) { kind = 'house'; guessed = true; }
+        else if (area < 360) { kind = 'lowres'; guessed = true; }
+      }
       map.buildings.push(pts);
-      map.bh.push(buildingHeight(t));
-      map.bk.push(buildingKind(t));
+      map.bh.push(h);
+      map.bk.push(kind);
+      map.binfo.push({ id: el.id, b: t.building, lv: t['building:levels'] || '', hgt: t.height || '', name: t.name || '', area: Math.round(area), guessed });
       if (t.name) {
         const [cx, cy] = centroid(pts);
         if (t.shop) map.shops.push({ x: cx, y: cy, name: t.name, kind: shopKind(t.shop) });
@@ -366,6 +385,7 @@ SB.downloadMap = async function (onStatus) {
   for (let i = 0; i < PARTS.length; i++) {
     const part = PARTS[i];
     let json = await partCache('get', part.id);
+    if (json) onStatus(`Preparando ${part.label} (guardado)…`, false);
     if (!json) {
       const body = 'data=' + encodeURIComponent(partQuery(part, SB.BBOX));
       let lastErr;
@@ -402,7 +422,6 @@ SB.downloadMap = async function (onStatus) {
   if (elements.length < 50) throw new Error('respuesta vacía');
   const map = SB.processOSM({ elements });
   map.skipped = skipped;
-  await partCache('clear');
   return map;
 };
 
@@ -426,8 +445,8 @@ async function partCache(op, id, value) {
     const db = await idb();
     const st = (mode) => db.transaction('parts', mode).objectStore('parts');
     const req = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
-    if (op === 'get') return (await req(st('readonly').get(CACHE_KEY + ':' + id))) || null;
-    if (op === 'put') return await req(st('readwrite').put(value, CACHE_KEY + ':' + id));
+    if (op === 'get') return (await req(st('readonly').get(RAW_KEY + ':' + id))) || null;
+    if (op === 'put') return await req(st('readwrite').put(value, RAW_KEY + ':' + id));
     if (op === 'clear') return await req(st('readwrite').clear());
   } catch (e) { return null; }
 }
@@ -446,9 +465,14 @@ SB.saveCachedMap = async function (map) {
     return true;
   } catch (e) { return false; }
 };
-SB.clearCachedMap = async function () {
-  try { const db = await idb(); db.transaction('maps', 'readwrite').objectStore('maps').delete(CACHE_KEY); } catch (e) { /* nada */ }
+// Borra el mapa procesado y, si all = true, también los datos en bruto (fuerza descargar de nuevo)
+SB.clearCachedMap = async function (all) {
+  try { const db = await idb(); db.transaction('maps', 'readwrite').objectStore('maps').clear(); } catch (e) { /* nada */ }
+  if (all) await partCache('clear');
 };
+
+// Metros del juego -> latitud/longitud (para enlazar a openstreetmap.org)
+SB.toLatLon = function (x, y) { return { lat: SB.ORIGIN.lat - y / KY, lon: SB.ORIGIN.lon + x / KX }; };
 
 // ---------- Mapa de reserva (sin conexión) ----------
 // Cuadrícula aproximada inspirada en Sant Boi, por si no se puede descargar OSM.
