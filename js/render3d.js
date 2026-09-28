@@ -18,25 +18,41 @@ class Batches {
   get(x, z, mat) {
     const k = Math.floor(x / CH) + ',' + Math.floor(z / CH) + ',' + mat;
     let b = this.map.get(k);
-    if (!b) { b = { mat, p: [], c: [], uv: [] }; this.map.set(k, b); }
+    if (!b) { b = { mat, p: new Buf(Float32Array), c: new Buf(Uint8Array), uv: new Buf(Float32Array) }; this.map.set(k, b); }
     return b;
   }
 }
+// Buffer con tipo que crece solo (mucha menos memoria que un Array normal, importante en móviles)
+class Buf {
+  constructor(T) { this.T = T; this.a = new T(768); this.n = 0; }
+  reserve(k) {
+    if (this.n + k <= this.a.length) return;
+    const b = new this.T(Math.max(this.a.length * 2, this.n + k)); b.set(this.a); this.a = b;
+  }
+  push3(x, y, z) { this.reserve(3); const a = this.a; a[this.n++] = x; a[this.n++] = y; a[this.n++] = z; }
+  push2(x, y) { this.reserve(2); const a = this.a; a[this.n++] = x; a[this.n++] = y; }
+  view() { return this.a.subarray(0, this.n); }
+}
 function pushTri(b, ax, ay, az, bx, by, bz, cx, cy, cz, c) {
-  b.p.push(ax, ay, az, bx, by, bz, cx, cy, cz);
-  b.c.push(c.r, c.g, c.b, c.r, c.g, c.b, c.r, c.g, c.b);
+  b.p.push3(ax, ay, az); b.p.push3(bx, by, bz); b.p.push3(cx, cy, cz);
+  const r = Math.round(c.r * 255), g = Math.round(c.g * 255), bl = Math.round(c.b * 255);
+  b.c.push3(r, g, bl); b.c.push3(r, g, bl); b.c.push3(r, g, bl);
 }
 
 class Renderer3D {
   constructor(world, canvas) {
     this.w = world;
-    const R = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    R.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    const mobile = SB.isMobile();
+    this.mobile = mobile;
+    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lost = true; });
+    canvas.addEventListener('webglcontextrestored', () => { this.lost = false; });
+    const R = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !mobile, powerPreference: mobile ? 'default' : 'high-performance' });
+    R.setPixelRatio(mobile ? 1 : Math.min(window.devicePixelRatio || 1, 1.5));
     this.scene = new THREE.Scene();
     const sky = col('#9fc3e6');
     this.scene.background = sky;
-    this.scene.fog = new THREE.Fog(sky, 160, 480);
-    this.camera = new THREE.PerspectiveCamera(62, 1, 0.4, 900);
+    this.scene.fog = new THREE.Fog(sky, mobile ? 110 : 160, mobile ? 300 : 480);
+    this.camera = new THREE.PerspectiveCamera(62, 1, 0.4, mobile ? 320 : 900);
     this.scene.add(new THREE.HemisphereLight(0xe6f0ff, 0x8a7f6a, 0.62));
     const sun = new THREE.DirectionalLight(0xfff0d8, 0.55); sun.position.set(-0.45, 1, -0.3); this.scene.add(sun);
     this.mats = {
@@ -116,11 +132,12 @@ class Renderer3D {
     this.trees();
 
     for (const bt of B.map.values()) {
-      if (!bt.p.length) continue;
+      if (!bt.p.n) continue;
       const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute(bt.p, 3));
-      g.setAttribute('color', new THREE.Float32BufferAttribute(bt.c, 3));
-      if (bt.mat === 'wall') g.setAttribute('uv', new THREE.Float32BufferAttribute(bt.uv, 2));
+      g.setAttribute('position', new THREE.BufferAttribute(bt.p.a.slice(0, bt.p.n), 3));
+      g.setAttribute('color', new THREE.BufferAttribute(bt.c.a.slice(0, bt.c.n), 3, true));
+      if (bt.mat === 'wall') g.setAttribute('uv', new THREE.BufferAttribute(bt.uv.a.slice(0, bt.uv.n), 2));
+      bt.p = bt.c = bt.uv = null;
       g.computeVertexNormals();
       g.computeBoundingSphere();
       const mesh = new THREE.Mesh(g, this.mats[bt.mat]);
@@ -206,7 +223,8 @@ class Renderer3D {
       const u = Math.max(1, Math.round(L / 3.6));
       pushTri(wb, x1, 0, z1, x2, 0, z2, x2, h, z2, wallC);
       pushTri(wb, x1, 0, z1, x2, h, z2, x1, h, z1, wallC);
-      wb.uv.push(0, 0, u, 0, u, floors, 0, 0, u, floors, 0, floors);
+      wb.uv.push2(0, 0); wb.uv.push2(u, 0); wb.uv.push2(u, floors);
+      wb.uv.push2(0, 0); wb.uv.push2(u, floors); wb.uv.push2(0, floors);
     }
     const pts = [];
     for (let k = 0; k < n; k++) pts.push(new THREE.Vector2(p[k * 2], p[k * 2 + 1]));
@@ -227,7 +245,7 @@ class Renderer3D {
       const ring = a.rings[0], bb = a.bb;
       const area = (bb[2] - bb[0]) * (bb[3] - bb[1]);
       const n = Math.min(400, Math.floor(area / (a.kind === 'wood' ? 90 : 220)));
-      for (let k = 0; k < n && spots.length < 4000; k++) {
+      for (let k = 0; k < n && spots.length < (this.mobile ? 1200 : 4000); k++) {
         const x = bb[0] + Math.random() * (bb[2] - bb[0]), z = bb[1] + Math.random() * (bb[3] - bb[1]);
         let inside = false;
         for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2)
@@ -479,6 +497,9 @@ class Renderer3D {
 }
 
 SB.Renderer3D = Renderer3D;
+SB.isMobile = function () {
+  return (window.matchMedia && matchMedia('(pointer: coarse)').matches) || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+};
 SB.webglAvailable = function () {
   try { const c = document.createElement('canvas'); return !!(window.WebGLRenderingContext && (c.getContext('webgl2') || c.getContext('webgl'))); }
   catch (e) { return false; }

@@ -58,9 +58,14 @@ function start() {
     };
     game = new SB.Game(world, $('game'), hud);
     window.game = game;
-    if (window.THREE && SB.webglAvailable()) {
-      try { game.r3d = new SB.Renderer3D(world, $('game3d')); game.r3d.resize(); } catch (e) { console.warn('Sin 3D', e); }
-    }
+    game.init3d = () => {
+      if (game.r3d) return;
+      if (!window.THREE) { game.r3dError = 'no se pudo cargar Three.js'; return; }
+      if (!SB.webglAvailable()) { game.r3dError = 'el navegador no tiene WebGL activado'; return; }
+      try { game.r3d = new SB.Renderer3D(world, $('game3d')); game.r3d.resize(); }
+      catch (e) { console.warn('Sin 3D', e); game.r3dError = e && e.message ? e.message : String(e); game.r3d = null; }
+    };
+    game.init3d();
     let pref = '3d';
     try { pref = localStorage.getItem('santboi-view') || '3d'; } catch (e) { /* nada */ }
     game.setView(pref === '3d');

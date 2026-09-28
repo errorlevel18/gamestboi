@@ -88,6 +88,8 @@ class Game {
   }
 
   setView(v3d) {
+    if (v3d && !this.r3d && this.init3d) this.init3d();
+    if (v3d && !this.r3d) { this.msg('Vista 3D no disponible en este dispositivo' + (this.r3dError ? ': ' + this.r3dError : ''), 5); }
     this.view3d = v3d && !!this.r3d;
     if (this.r3d) this.r3d.renderer.domElement.style.display = this.view3d ? 'block' : 'none';
     try { localStorage.setItem('santboi-view', this.view3d ? '3d' : '2d'); } catch (e) { /* nada */ }
@@ -985,6 +987,7 @@ class Game {
 
   // ---------- render ----------
   render() {
+    if (this.view3d && this.r3d.lost) { this.setView(false); this.msg('Se perdió el contexto 3D; pulsa CÁM para volver a intentarlo', 4); }
     if (this.view3d) {
       this.r3d.render(this, this.lastDt || 0.016);
       const g = this.ctx;
