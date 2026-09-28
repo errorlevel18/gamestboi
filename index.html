@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Grand Theft Sant Boi</title>
+<style>
+  :root { --gold: #ffd21f; --ink: #0d0d0f; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #111; color: #fff;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; touch-action: none; user-select: none; -webkit-user-select: none; }
+  canvas#game { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+
+  /* ---------- pantalla de título ---------- */
+  #title { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 16px;
+    background: radial-gradient(ellipse at 30% 20%, #3b2a5a 0%, #150f22 55%, #07060b 100%); }
+  #title .card { max-width: 560px; width: 100%; text-align: center; }
+  #title h1 { margin: 0; font-size: clamp(38px, 9vw, 76px); line-height: .92; font-weight: 900; font-style: italic; letter-spacing: -1px;
+    text-transform: uppercase; color: #fff; text-shadow: 3px 3px 0 #000, 6px 6px 0 #e0457b; }
+  #title h1 span { display: block; color: var(--gold); text-shadow: 3px 3px 0 #000, 6px 6px 0 #1f7fe0; }
+  #title .sub { margin: 18px 0 22px; color: #cfc6e6; font-size: 15px; }
+  #status { min-height: 22px; color: #9fe3b0; font-size: 14px; margin-bottom: 16px; }
+  #status.err { color: #ffb3a1; }
+  .btn { display: inline-block; margin: 5px; padding: 13px 26px; font-size: 18px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase;
+    border: 3px solid #000; border-radius: 6px; background: var(--gold); color: #000; cursor: pointer; box-shadow: 4px 4px 0 #000; }
+  .btn:disabled { opacity: .4; cursor: wait; }
+  .btn.small { font-size: 12px; padding: 8px 14px; background: #ddd; box-shadow: 3px 3px 0 #000; }
+  .controls { margin-top: 20px; font-size: 13px; color: #b9b0d4; line-height: 1.7; text-align: left; display: inline-block; }
+  kbd { background: #2d2640; border: 1px solid #5a4d80; border-radius: 4px; padding: 1px 6px; font-family: inherit; font-size: 12px; color: #fff; }
+  .osm { position: fixed; right: 6px; bottom: 4px; z-index: 30; font-size: 10px; color: rgba(255,255,255,.75); text-shadow: 0 0 3px #000; }
+  .osm a { color: inherit; }
+
+  /* ---------- HUD ---------- */
+  #hud { position: fixed; inset: 0; pointer-events: none; display: none; z-index: 5; }
+  #hud.on { display: block; }
+  .tr { position: absolute; top: 10px; right: 14px; text-align: right; }
+  #money { font: 900 30px/1 "Courier New", monospace; color: #6dff6d; text-shadow: 2px 2px 0 #000, -1px -1px 0 #000; letter-spacing: 1px; }
+  #stars { font-size: 26px; letter-spacing: 2px; margin-top: 4px; text-shadow: 2px 2px 0 #000; }
+  #stars span { color: rgba(255,255,255,.18); }
+  #stars span.on { color: var(--gold); }
+  #stars span.blink { color: rgba(255,210,31,.35); }
+  .bar { width: 160px; height: 10px; border: 2px solid #000; background: #3a0d0d; margin: 6px 0 0 auto; }
+  .bar i { display: block; height: 100%; background: #e53935; width: 100%; }
+  #carbox { display: none; margin-top: 8px; }
+  #speed { font: 900 22px/1 "Courier New", monospace; text-shadow: 2px 2px 0 #000; }
+  #carName { font-size: 12px; font-weight: 700; text-transform: uppercase; opacity: .85; text-shadow: 1px 1px 0 #000; }
+  #carHpBar i { background: #f39c12; }
+  .bl { position: absolute; left: 14px; bottom: 16px; }
+  #mini { width: 180px; height: 180px; display: block; border-radius: 50%; }
+  #zone { margin-top: 8px; font-weight: 900; font-style: italic; font-size: 18px; text-transform: uppercase; color: var(--gold); text-shadow: 2px 2px 0 #000; }
+  #street { font-weight: 700; font-size: 15px; text-shadow: 2px 2px 0 #000; min-height: 18px; }
+  #mission { display: none; position: absolute; top: 10px; left: 50%; transform: translateX(-50%); max-width: min(520px, 60vw);
+    background: rgba(0,0,0,.62); border-left: 5px solid var(--gold); padding: 8px 14px; border-radius: 4px; }
+  #mTitle { font-weight: 900; text-transform: uppercase; color: var(--gold); font-size: 14px; }
+  #mText { font-size: 15px; margin-top: 2px; }
+  #mFoot { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; margin-top: 4px; opacity: .9; }
+  #timer { font: 900 18px "Courier New", monospace; color: #fff; }
+  #msg { position: absolute; left: 50%; top: 30%; transform: translateX(-50%); text-align: center; font-size: 20px; font-weight: 800;
+    text-shadow: 2px 2px 0 #000, -1px -1px 0 #000; opacity: 0; transition: opacity .2s; max-width: 90vw; }
+  #msg.show { opacity: 1; }
+  #msg.big { font-size: 34px; font-style: italic; text-transform: uppercase; color: var(--gold); }
+  #big { position: absolute; left: 0; right: 0; top: 40%; text-align: center; font-size: clamp(50px, 14vw, 120px); font-weight: 900; font-style: italic;
+    letter-spacing: 4px; opacity: 0; transition: opacity .6s; text-shadow: 4px 4px 0 #000; }
+  #big.show { opacity: 1; }
+  #big.wasted { color: #e53935; } #big.busted { color: #3b7bff; }
+  #pause { display: none; position: absolute; inset: 0; background: rgba(0,0,0,.6); align-items: center; justify-content: center; flex-direction: column;
+    font-size: 40px; font-weight: 900; font-style: italic; pointer-events: auto; }
+  #pause p { font-size: 14px; font-style: normal; font-weight: 400; }
+  #mute { position: absolute; right: 14px; bottom: 22px; pointer-events: auto; background: rgba(0,0,0,.5); border: 1px solid #555; color: #fff;
+    border-radius: 6px; padding: 4px 8px; font-size: 16px; cursor: pointer; }
+
+  /* ---------- controles táctiles ---------- */
+  #touch { display: none; position: fixed; inset: 0; z-index: 6; pointer-events: none; }
+  #touch.on { display: block; }
+  #stick { position: absolute; left: 22px; bottom: 210px; width: 130px; height: 130px; border-radius: 50%; background: rgba(255,255,255,.08);
+    border: 2px solid rgba(255,255,255,.25); pointer-events: auto; }
+  #knob { position: absolute; left: 40px; top: 40px; width: 50px; height: 50px; border-radius: 50%; background: rgba(255,255,255,.35); }
+  .tb { position: absolute; width: 70px; height: 70px; border-radius: 50%; background: rgba(0,0,0,.45); border: 2px solid rgba(255,255,255,.4);
+    color: #fff; font-weight: 900; font-size: 15px; display: flex; align-items: center; justify-content: center; pointer-events: auto; text-align: center; line-height: 1; }
+  #tFire { right: 22px; bottom: 120px; } #tEnter { right: 105px; bottom: 60px; } #tMap { right: 22px; bottom: 205px; width: 50px; height: 50px; font-size: 13px; }
+  @media (max-width: 700px) {
+    #mini { width: 120px; height: 120px; }
+    #money { font-size: 22px; } #stars { font-size: 20px; } .bar { width: 110px; }
+    #mission { max-width: 92vw; top: auto; bottom: 8px; }
+    #zone { font-size: 14px; } #street { font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud">
+  <div class="tr">
+    <div id="money">$00000500</div>
+    <div id="stars"></div>
+    <div class="bar"><i id="hp"></i></div>
+    <div id="carbox">
+      <div id="speed">0 km/h</div>
+      <div id="carName"></div>
+      <div class="bar" id="carHpBar"><i id="carHp"></i></div>
+    </div>
+  </div>
+  <div class="bl">
+    <canvas id="mini" width="180" height="180"></canvas>
+    <div id="zone">Sant Boi de Llobregat</div>
+    <div id="street"></div>
+  </div>
+  <div id="mission"><div id="mTitle"></div><div id="mText"></div><div id="mFoot"><span id="reward"></span><span id="timer"></span></div></div>
+  <div id="msg"></div>
+  <div id="big"></div>
+  <div id="pause">PAUSA<p>Pulsa P o Esc para continuar</p></div>
+  <button id="mute" title="Sonido">🔊</button>
+</div>
+
+<div id="touch">
+  <div id="stick"><div id="knob"></div></div>
+  <div class="tb" id="tFire">🔫<br>freno</div>
+  <div class="tb" id="tEnter">SUBIR<br>BAJAR</div>
+  <div class="tb" id="tMap">MAPA</div>
+</div>
+
+<div id="title">
+  <div class="card">
+    <h1>Grand Theft<span>Sant Boi</span></h1>
+    <div class="sub">Las calles reales de Sant Boi de Llobregat, sacadas de OpenStreetMap.</div>
+    <div id="status">Cargando…</div>
+    <button class="btn" id="play" disabled>Jugar</button><br>
+    <button class="btn small" id="reload">Volver a descargar el mapa</button>
+    <button class="btn small" id="offline">Jugar sin conexión (mapa aproximado)</button>
+    <label class="btn small" style="cursor:pointer">Cargar JSON de Overpass<input type="file" id="file" accept=".json,application/json" hidden></label>
+    <div class="controls">
+      <b>A pie:</b> <kbd>WASD</kbd>/<kbd>flechas</kbd> moverse · <kbd>Shift</kbd> correr · <kbd>Espacio</kbd> disparar<br>
+      <b>En coche:</b> <kbd>W</kbd> acelerar · <kbd>S</kbd> frenar/marcha atrás · <kbd>A</kbd><kbd>D</kbd> girar · <kbd>Espacio</kbd> freno de mano · <kbd>H</kbd> claxon<br>
+      <kbd>E</kbd> robar coche / bajar · <kbd>M</kbd> mapa · <kbd>P</kbd> pausa<br>
+      Pisa los círculos verdes <b style="color:#35d46a">M</b> para empezar misiones.
+    </div>
+  </div>
+</div>
+<div class="osm">Mapa © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a></div>
+
+<script src="js/data.js"></script>
+<script src="js/world.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/game.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

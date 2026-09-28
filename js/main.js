@@ -1,0 +1,114 @@
+// Arranque: carga del mapa, pantalla de título, entrada y bucle principal
+'use strict';
+(function () {
+const SB = window.SB;
+const $ = (id) => document.getElementById(id);
+const status = $('status'), playBtn = $('play');
+let map = null, game = null;
+
+function setStatus(t, err) { status.textContent = t; status.className = err ? 'err' : ''; }
+
+function ready(m, note) {
+  map = m;
+  const kind = m.source === 'fallback' ? 'mapa aproximado' : `${m.roads.length} calles y ${m.buildings.length} edificios`;
+  setStatus(`${note || 'Mapa listo'}: ${kind}`);
+  playBtn.disabled = false;
+  playBtn.focus();
+}
+
+async function load(force) {
+  playBtn.disabled = true;
+  if (!force) {
+    const cached = await SB.loadCachedMap();
+    if (cached) { ready(cached, 'Mapa de Sant Boi (guardado)'); return; }
+  } else await SB.clearCachedMap();
+  try {
+    const m = await SB.downloadMap((t) => setStatus(t));
+    SB.saveCachedMap(m);
+    ready(m, 'Mapa de Sant Boi descargado');
+  } catch (e) {
+    setStatus('No se pudo descargar el mapa de OpenStreetMap (' + e.message + '). Puedes reintentar o jugar con el mapa aproximado.', true);
+  }
+}
+
+$('reload').onclick = () => load(true);
+$('offline').onclick = () => ready(SB.fallbackMap(), 'Sin conexión');
+$('file').onchange = async (ev) => {
+  const f = ev.target.files[0]; if (!f) return;
+  try {
+    const json = JSON.parse(await f.text());
+    const m = SB.processOSM(json);
+    if (!m.roads.length) throw new Error('el archivo no tiene calles');
+    SB.saveCachedMap(m);
+    ready(m, 'Mapa cargado desde archivo');
+  } catch (e) { setStatus('Archivo no válido: ' + e.message, true); }
+};
+
+playBtn.onclick = start;
+
+function start() {
+  if (!map || game) return;
+  setStatus('Construyendo Sant Boi…');
+  setTimeout(() => {
+    const world = new SB.World(map);
+    const hud = {
+      money: $('money'), stars: $('stars'), hp: $('hp'), car: $('carbox'), speed: $('speed'), carName: $('carName'), carHp: $('carHp'),
+      mini: $('mini'), zone: $('zone'), street: $('street'), mission: $('mission'), missionTitle: $('mTitle'), missionText: $('mText'),
+      timer: $('timer'), reward: $('reward'), msg: $('msg'), big: $('big'), pause: $('pause'),
+    };
+    game = new SB.Game(world, $('game'), hud);
+    window.game = game;
+    game.audio.unlock();
+    $('title').style.display = 'none';
+    $('hud').classList.add('on');
+    if (matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window) $('touch').classList.add('on');
+    let last = performance.now();
+    const frame = (now) => {
+      const dt = Math.min(0.05, (now - last) / 1000); last = now;
+      // subpasos para que la física sea estable
+      const n = dt > 0.025 ? 2 : 1;
+      for (let i = 0; i < n; i++) { game.update(dt / n); if (i < n - 1) game.pressed = {}; }
+      game.render();
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }, 30);
+}
+
+// ---------- teclado ----------
+addEventListener('keydown', (e) => {
+  if (!game) { if (e.code === 'Enter' && !playBtn.disabled) start(); return; }
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+  if (!e.repeat) game.pressed[e.code] = true;
+  game.keys[e.code] = true;
+  game.audio.unlock();
+});
+addEventListener('keyup', (e) => { if (game) game.keys[e.code] = false; });
+addEventListener('blur', () => { if (game) { game.keys = {}; game.paused = true; } });
+addEventListener('resize', () => { if (game) game.resize(); });
+$('mute').onclick = () => { if (game) $('mute').textContent = game.audio.toggleMute() ? '🔇' : '🔊'; };
+
+// ---------- controles táctiles ----------
+const stick = $('stick'), knob = $('knob');
+let stickId = null;
+function stickMove(t) {
+  const r = stick.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  let dx = (t.clientX - cx) / (r.width / 2), dy = (t.clientY - cy) / (r.height / 2);
+  const d = Math.hypot(dx, dy); if (d > 1) { dx /= d; dy /= d; }
+  knob.style.transform = `translate(${dx * 40}px, ${dy * 40}px)`;
+  if (game) { game.touch.jx = dx; game.touch.jy = dy; game.touch.active = true; }
+}
+stick.addEventListener('touchstart', (e) => { e.preventDefault(); stickId = e.changedTouches[0].identifier; stickMove(e.changedTouches[0]); if (game) game.audio.unlock(); }, { passive: false });
+stick.addEventListener('touchmove', (e) => { e.preventDefault(); for (const t of e.changedTouches) if (t.identifier === stickId) stickMove(t); }, { passive: false });
+const stickEnd = (e) => { for (const t of e.changedTouches) if (t.identifier === stickId) { stickId = null; knob.style.transform = ''; if (game) { game.touch.jx = 0; game.touch.jy = 0; } } };
+stick.addEventListener('touchend', stickEnd); stick.addEventListener('touchcancel', stickEnd);
+const hold = (el, on, off) => {
+  el.addEventListener('touchstart', (e) => { e.preventDefault(); if (game) { game.touch.active = true; on(); } }, { passive: false });
+  el.addEventListener('touchend', (e) => { e.preventDefault(); if (game && off) off(); }, { passive: false });
+};
+hold($('tFire'), () => { game.touch.fire = true; }, () => { game.touch.fire = false; });
+hold($('tEnter'), () => { game.pressed.KeyE = true; });
+hold($('tMap'), () => { game.pressed.KeyM = true; });
+
+load(false);
+})();
