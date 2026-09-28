@@ -1,5 +1,7 @@
-# Descarga el mapa de Sant Boi de OpenStreetMap y lo publica en data/ para que el juego
-# no dependa de los servidores de Overpass (que a menudo están saturados).
+# Genera el mapa de Sant Boi a partir de OpenStreetMap y lo publica en data/, para que el juego
+# no dependa de los servidores públicos de Overpass (que a menudo están saturados).
+#  1) Geofabrik: extracto diario de Cataluña -> recorte de Sant Boi con osmium -> data/*.json
+#  2) Plan B si Geofabrik falla: consultas a Overpass (tools/fetch-osm.mjs)
 name: Actualizar mapa de Sant Boi
 
 on:
@@ -8,9 +10,8 @@ on:
     - cron: '17 4 * * 1'   # cada lunes de madrugada
   push:
     paths:
-      - 'tools/fetch-osm.mjs'
+      - 'tools/**'
       - '.github/workflows/update-map.yml'
-      - 'js/data.js'
 
 permissions:
   contents: write
@@ -18,18 +19,32 @@ permissions:
 
 concurrency:
   group: update-map
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Descargar el mapa desde Overpass
+      - name: Instalar osmium
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
+      - name: Mapa desde Geofabrik (extracto de Cataluña)
+        id: geofabrik
+        continue-on-error: true
+        run: |
+          curl -fL --retry 3 --retry-delay 10 -o cataluna.osm.pbf https://download.geofabrik.de/europe/spain/cataluna-latest.osm.pbf
+          ls -lh cataluna.osm.pbf
+          # recorte algo mayor que el área de juego; relaciones (multipolígonos y rutas de bus) completas
+          osmium extract -b 2.005,41.32,2.066,41.366 --strategy smart -S types=multipolygon,route cataluna.osm.pbf -o sb.osm.pbf --overwrite
+          osmium cat sb.osm.pbf -f opl,add_metadata=false -o sb.opl --overwrite
+          ls -lh sb.osm.pbf sb.opl
+          node tools/pbf-to-parts.mjs sb.opl
+      - name: Plan B - mapa desde Overpass
+        if: steps.geofabrik.outcome != 'success'
         run: node tools/fetch-osm.mjs
       - name: Guardar el mapa en el repositorio
         run: |
