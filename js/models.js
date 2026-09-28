@@ -43,6 +43,51 @@ class Models {
     this.head = new T.SphereGeometry(0.115, 12, 10);
     this.hairShort = new T.SphereGeometry(0.125, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55);
     this.skirt = new T.CylinderGeometry(0.16, 0.27, 0.42, 12);
+    this.carCache = new Map();
+    this.vcPhong = new T.MeshPhongMaterial({ vertexColors: true, shininess: 70, specular: 0x444444, side: T.DoubleSide });
+    this.vcLambert = new T.MeshLambertMaterial({ vertexColors: true });
+  }
+
+  // Fusiona las mallas hijas directas de cada grupo en una sola malla con colores por vértice.
+  // Así un coche pasa de ~30 mallas a ~7 y una persona de ~20 a ~11 (menos llamadas de dibujo).
+  collapse(root, keep, shiny) {
+    const T = this.T, groups = [];
+    root.traverse((o) => { if (o.children.some(c => c.isMesh && !keep(c))) groups.push(o); });
+    const tmp = new T.Color();
+    for (const grp of groups) {
+      const meshes = grp.children.filter(c => c.isMesh && !keep(c));
+      let n = 0;
+      const geos = meshes.map((m) => {
+        m.updateMatrix();
+        const g = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+        for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);
+        g.applyMatrix4(m.matrix);
+        n += g.attributes.position.count;
+        return g;
+      });
+      const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), col = new Float32Array(n * 3);
+      let o = 0;
+      geos.forEach((g, i) => {
+        const mt = meshes[i].material;
+        tmp.copy(mt.color);
+        if (mt.emissive) { tmp.r = Math.min(1, tmp.r + mt.emissive.r * 0.6); tmp.g = Math.min(1, tmp.g + mt.emissive.g * 0.6); tmp.b = Math.min(1, tmp.b + mt.emissive.b * 0.6); }
+        const c = g.attributes.position.count;
+        pos.set(g.attributes.position.array, o * 3);
+        if (g.attributes.normal) nor.set(g.attributes.normal.array, o * 3);
+        for (let k = 0; k < c; k++) { col[(o + k) * 3] = tmp.r; col[(o + k) * 3 + 1] = tmp.g; col[(o + k) * 3 + 2] = tmp.b; }
+        o += c;
+        g.dispose();
+      });
+      const merged = new T.BufferGeometry();
+      merged.setAttribute('position', new T.BufferAttribute(pos, 3));
+      merged.setAttribute('normal', new T.BufferAttribute(nor, 3));
+      merged.setAttribute('color', new T.BufferAttribute(col, 3));
+      merged.computeBoundingSphere();
+      for (const m of meshes) grp.remove(m);
+      const mesh = new T.Mesh(merged, shiny && grp === root ? this.vcPhong : this.vcLambert);
+      if (grp === root) mesh.name = 'body';
+      grp.add(mesh);
+    }
   }
 
   m(color, opts) {
@@ -97,11 +142,35 @@ class Models {
     return mesh;
   }
 
+  // Coche listo para usar: se construye una vez por modelo+color, se fusiona y luego se clona
   car(model, color) {
+    const key = model.name + '|' + color;
+    let tpl = this.carCache.get(key);
+    if (!tpl) {
+      tpl = this.buildCar(model, color);
+      this.collapse(tpl, (m) => m.name === 'red' || m.name === 'blue' || m.name === 'shadow', true);
+      // clone() copia userData con JSON: lo vaciamos para no serializar mallas en cada coche nuevo
+      tpl.traverse((o) => { o.userData = o.name === 'wheelF' || o.name === 'wheelB' ? { r: o.userData.r } : {}; });
+      this.carCache.set(key, tpl);
+    }
+    const g = tpl.clone();
+    const parts = { body: [], wheels: [] };
+    g.traverse((o) => {
+      if (o.name === 'wheelF' || o.name === 'wheelB') parts.wheels.push({ pivot: o, wheel: o.children[0], front: o.name === 'wheelF', r: o.userData.r });
+      else if (o.name === 'body') parts.body.push(o);
+      else if (o.name === 'red') parts.red = o; else if (o.name === 'blue') parts.blue = o;
+      else if (o.name === 'rider') parts.rider = o;
+    });
+    for (const w of parts.wheels) w.wheel = w.pivot.children.find(c => c.name === 'wheel') || w.pivot.children[0];
+    g.userData = parts;
+    return g;
+  }
+
+  buildCar(model, color) {
     const T = this.T, g = new T.Group(), L = model.l, W = model.w;
     const parts = { body: [], wheels: [], spin: 0 };
     const shadow = new T.Mesh(new T.PlaneGeometry(L + 0.5, W + 0.5), new T.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.32, depthWrite: false }));
-    shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.05; g.add(shadow);
+    shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.05; shadow.name = 'shadow'; g.add(shadow);
 
     if (model.bike) return this.bike(model, color, g, parts);
     if (model.bus) return this.bus(model, color, g, parts);
@@ -145,6 +214,7 @@ class Models {
       this.add(g, this.box, this.m('#222'), 0.3, 0.08, W * 0.8, -L * 0.1, 1.44, 0);
       parts.red = this.add(g, this.box, this.m('#7a1d1d'), 0.26, 0.14, W * 0.36, -L * 0.1, 1.53, W * 0.2);
       parts.blue = this.add(g, this.box, this.m('#1d2f7a'), 0.26, 0.14, W * 0.36, -L * 0.1, 1.53, -W * 0.2);
+      parts.red.name = 'red'; parts.blue.name = 'blue';
     }
     if (model.sport) this.add(g, this.box, this.m('#111'), 0.06, 0.2, W * 0.9, -L / 2 + 0.05, 0.95, 0); // alerón
     // ruedas
@@ -152,7 +222,8 @@ class Models {
     const tire = this.m('#141414'), rim = this.m('#b9bcc0', { phong: true });
     for (const sx of [1, -1]) for (const sz of [1, -1]) {
       const pivot = new T.Group(); pivot.position.set(sx * L * 0.32, r, sz * (W / 2 - 0.12));
-      const wheel = new T.Group();
+      pivot.name = sx > 0 ? 'wheelF' : 'wheelB'; pivot.userData.r = r;
+      const wheel = new T.Group(); wheel.name = 'wheel';
       this.add(wheel, this.tire, tire, r, r, 0.22, 0, 0, 0);
       this.add(wheel, this.hub, rim, r * 0.6, r * 0.6, 0.24, 0, 0, 0);
       this.add(wheel, this.box, tire, r * 1.1, 0.07, 0.25, 0, 0, 0); // radio: se ve girar
@@ -171,12 +242,13 @@ class Models {
     this.add(g, this.box, this.m('#999'), 0.06, 0.06, 0.6, model.l * 0.36, 1.12, 0);
     for (const sx of [1, -1]) {
       const pivot = new T.Group(); pivot.position.set(sx * model.l * 0.36, 0.32, 0);
-      const wheel = new T.Group(); this.add(wheel, this.tire, tire, 0.32, 0.32, 0.12, 0, 0, 0);
+      pivot.name = sx > 0 ? 'wheelF' : 'wheelB'; pivot.userData.r = 0.32;
+      const wheel = new T.Group(); wheel.name = 'wheel'; this.add(wheel, this.tire, tire, 0.32, 0.32, 0.12, 0, 0, 0);
       this.add(wheel, this.box, this.m('#888'), 0.36, 0.05, 0.13, 0, 0, 0);
       pivot.add(wheel); g.add(pivot); parts.wheels.push({ pivot, wheel, front: sx > 0, r: 0.32 });
     }
     const rider = this.ped({ shirt: '#e67e22', pants: '#1b2631', hair: '#111', skin: '#d9a47a', player: true });
-    rider.position.set(-0.2, 0.25, 0); rider.userData.sit = true;
+    rider.position.set(-0.2, 0.25, 0); rider.name = 'rider';
     this.pose(rider, 0, 0, 'sit');
     g.add(rider); parts.rider = rider;
     g.userData = parts;
@@ -197,7 +269,8 @@ class Models {
     const tire = this.m('#141414'), rim = this.m('#b9bcc0');
     for (const sx of [0.32, -0.3]) for (const sz of [1, -1]) {
       const pivot = new T.Group(); pivot.position.set(sx * L, 0.5, sz * (W / 2 - 0.2));
-      const wheel = new T.Group(); this.add(wheel, this.tire, tire, 0.5, 0.5, 0.3, 0, 0, 0); this.add(wheel, this.hub, rim, 0.3, 0.3, 0.32, 0, 0, 0);
+      pivot.name = sx > 0 ? 'wheelF' : 'wheelB'; pivot.userData.r = 0.5;
+      const wheel = new T.Group(); wheel.name = 'wheel'; this.add(wheel, this.tire, tire, 0.5, 0.5, 0.3, 0, 0, 0); this.add(wheel, this.hub, rim, 0.3, 0.3, 0.32, 0, 0, 0);
       this.add(wheel, this.box, tire, 0.55, 0.08, 0.33, 0, 0, 0);
       pivot.add(wheel); g.add(pivot); parts.wheels.push({ pivot, wheel, front: sx > 0, r: 0.5 });
     }
@@ -254,6 +327,7 @@ class Models {
     }
     if (o.player) this.add(arms[1].el, this.box, this.m('#2b2b2b'), 0.25, 0.07, 0.05, 0.08, -0.33, 0); // pistola
     g.userData = { hips, torso, legs, arms, sk };
+    this.collapse(g, () => false, false);
     return g;
   }
 

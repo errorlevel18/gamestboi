@@ -3,6 +3,7 @@
 (function () {
 const SB = window.SB;
 const CH = 200; // tamaño de trozo (m) para descartar geometría fuera de cámara
+const TCH = 400; // trozos de árboles
 const TAU = Math.PI * 2;
 const angDiff = (a, b) => { let d = (b - a) % TAU; if (d > Math.PI) d -= TAU; if (d < -Math.PI) d += TAU; return d; };
 
@@ -18,7 +19,7 @@ class Batches {
   get(x, z, mat) {
     const k = Math.floor(x / CH) + ',' + Math.floor(z / CH) + ',' + mat;
     let b = this.map.get(k);
-    if (!b) { b = { mat, p: new Buf(Float32Array), c: new Buf(Uint8Array), uv: new Buf(Float32Array) }; this.map.set(k, b); }
+    if (!b) { b = { mat, p: new Buf(Float32Array), c: new Buf(Uint8Array), uv: new Buf(Float32Array), cell: new Buf(Float32Array) }; this.map.set(k, b); }
     return b;
   }
 }
@@ -59,9 +60,8 @@ class Renderer3D {
       flat: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
       roof: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
     };
-    this.facades = SB.buildFacades(THREE);
-    for (const k in this.facades.upper) this.mats['u_' + k] = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, map: this.facades.upper[k].tex });
-    for (const k in this.facades.ground) this.mats['g_' + k] = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, map: this.facades.ground[k].tex });
+    this.atlas = SB.buildFacadeAtlas(THREE);
+    this.mats.wall = this.wallMaterial(this.atlas);
     this.bHeight = new Float32Array(world.buildings.length);
     this.bBase = new Float32Array(world.buildings.length);
     this.buildStatic();
@@ -75,6 +75,26 @@ class Renderer3D {
     this.yaw = null;
     this.camPos = new THREE.Vector3();
     this.resize();
+  }
+
+  // Material de fachadas: repite cada celda del atlas con fract() (atributo "cell" = esquina de la celda)
+  wallMaterial(atlas) {
+    const m = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, map: atlas.tex });
+    m.onBeforeCompile = (sh) => {
+      sh.uniforms.cellSize = { value: new THREE.Vector2(atlas.size[0], atlas.size[1]) };
+      sh.vertexShader = 'attribute vec2 cell;\nvarying vec2 vCell;\n' + sh.vertexShader.replace('#include <uv_vertex>', '#include <uv_vertex>\nvCell = cell;');
+      sh.fragmentShader = 'uniform vec2 cellSize;\nvarying vec2 vCell;\n' + sh.fragmentShader.replace('#include <map_fragment>', `
+#ifdef USE_MAP
+  vec2 fuv = vCell + fract(vUv) * cellSize;
+  #if __VERSION__ >= 300
+    vec4 sampledDiffuseColor = textureGrad(map, fuv, dFdx(vUv) * cellSize, dFdy(vUv) * cellSize);
+  #else
+    vec4 sampledDiffuseColor = texture2D(map, fuv);
+  #endif
+  diffuseColor *= sampledDiffuseColor;
+#endif`);
+    };
+    return m;
   }
 
   resize() {
@@ -113,8 +133,11 @@ class Renderer3D {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(bt.p.a.slice(0, bt.p.n), 3));
       g.setAttribute('color', new THREE.BufferAttribute(bt.c.a.slice(0, bt.c.n), 3, true));
-      if (bt.mat !== 'flat' && bt.mat !== 'roof') g.setAttribute('uv', new THREE.BufferAttribute(bt.uv.a.slice(0, bt.uv.n), 2));
-      bt.p = bt.c = bt.uv = null;
+      if (bt.mat === 'wall') {
+        g.setAttribute('uv', new THREE.BufferAttribute(bt.uv.a.slice(0, bt.uv.n), 2));
+        g.setAttribute('cell', new THREE.BufferAttribute(bt.cell.a.slice(0, bt.cell.n), 2));
+      }
+      bt.p = bt.c = bt.uv = bt.cell = null;
       g.computeVertexNormals();
       g.computeBoundingSphere();
       const mesh = new THREE.Mesh(g, this.mats[bt.mat]);
@@ -200,8 +223,9 @@ class Renderer3D {
     else upper = ['classic', 'balcony', 'brick', 'brick', 'brickBalcony', 'blind', 'blind', 'plaster', 'modern', 'balcony'][Math.floor(r1 * 10)];
     if ((kind === '' || kind === 'commercial') && h > 6)
       ground = ['shopRed', 'shopGreen', 'shopBlue', 'shopOrange', 'shutter1', 'shutter2', 'shutter1', 'door', 'door', 'garage'][Math.floor(r2 * 10)];
-    const tintC = (style, set) => set[style].tint ? col(WALLS[Math.floor(r3 * WALLS.length)]) : new THREE.Color().setScalar(0.9 + r3 * 0.1);
-    const upC = tintC(upper, this.facades.upper);
+    const tintC = (key) => this.atlas.tint[key] ? col(WALLS[Math.floor(r3 * WALLS.length)]) : new THREE.Color().setScalar(0.9 + r3 * 0.1);
+    const upC = tintC('u_' + upper);
+    const upCell = this.atlas.cells['u_' + upper], gCell = ground ? this.atlas.cells['g_' + ground] : null;
     const cx = (bd.bb[0] + bd.bb[2]) / 2, cz = (bd.bb[1] + bd.bb[3]) / 2;
     const n = p.length / 2 - 1;
     // base = punto más bajo del terreno bajo el edificio; las paredes bajan un poco más para no flotar
@@ -214,8 +238,8 @@ class Renderer3D {
     const gh = ground ? base + Math.min(3.8, h) : base;
     const floorH = kind === 'industrial' || kind === 'shed' ? h : kind === 'church' ? 5 : 3.1;
     const floors = Math.max(1, Math.round((h - gh) / floorH));
-    const ub = B.get(cx, cz, 'u_' + upper), gb = ground ? B.get(cx, cz, 'g_' + ground) : null;
-    const gC = ground ? tintC(ground, this.facades.ground) : null;
+    const ub = B.get(cx, cz, 'wall'), gb = ground ? ub : null;
+    const gC = ground ? tintC('g_' + ground) : null;
     for (let k = 0; k < n; k++) {
       const x1 = p[k * 2], z1 = p[k * 2 + 1], x2 = p[k * 2 + 2], z2 = p[k * 2 + 3];
       const L = Math.hypot(x2 - x1, z2 - z1);
@@ -226,12 +250,14 @@ class Renderer3D {
       pushTri(ub, x1, ub0, z1, x2, top, z2, x1, top, z1, upC);
       ub.uv.push2(0, 0); ub.uv.push2(u, 0); ub.uv.push2(u, floors);
       ub.uv.push2(0, 0); ub.uv.push2(u, floors); ub.uv.push2(0, floors);
+      for (let q = 0; q < 6; q++) ub.cell.push2(upCell[0], upCell[1]);
       if (gb) {
         pushTri(gb, x1, y0, z1, x2, y0, z2, x2, gh, z2, gC);
         pushTri(gb, x1, y0, z1, x2, gh, z2, x1, gh, z1, gC);
         const v0 = -0.8 / 3.8;
-        gb.uv.push2(0, v0); gb.uv.push2(u, v0); gb.uv.push2(u, 1);
-        gb.uv.push2(0, v0); gb.uv.push2(u, 1); gb.uv.push2(0, 1);
+        gb.uv.push2(0, v0); gb.uv.push2(u, v0); gb.uv.push2(u, 0.999);
+        gb.uv.push2(0, v0); gb.uv.push2(u, 0.999); gb.uv.push2(0, 0.999);
+        for (let q = 0; q < 6; q++) gb.cell.push2(gCell[0], gCell[1]);
       }
     }
     const pts = [];
@@ -410,7 +436,7 @@ class Renderer3D {
     // agrupamos por tipo y por trozo de mapa para que la cámara descarte los que no ve
     const groups = new Map();
     for (let i = 0; i < T.n; i++) {
-      const k = T.t[i] + ',' + Math.floor(T.x[i] / CH) + ',' + Math.floor(T.y[i] / CH);
+      const k = T.t[i] + ',' + Math.floor(T.x[i] / TCH) + ',' + Math.floor(T.y[i] / TCH);
       let l = groups.get(k); if (!l) groups.set(k, l = []); l.push(i);
     }
     const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), S = new THREE.Vector3(), P = new THREE.Vector3(), E = new THREE.Euler(), C = new THREE.Color();
@@ -420,12 +446,12 @@ class Renderer3D {
       const g = new THREE.BufferGeometry();
       for (const n in base.attributes) g.setAttribute(n, base.attributes[n]);
       if (base.index) g.setIndex(base.index);
-      g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 40, 0), CH * 0.75 + 60);
+      g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 40, 0), TCH * 0.75 + 60);
       return g;
     };
     for (const [k, list] of groups) {
       const [tt, gx, gz] = k.split(',').map(Number), ty = TYPES[tt];
-      const ox = (gx + 0.5) * CH, oz = (gz + 0.5) * CH;
+      const ox = (gx + 0.5) * TCH, oz = (gz + 0.5) * TCH;
       const crown = new THREE.InstancedMesh(chunkGeo(ty.crown), ty.mat || crownMat, list.length);
       const trunk = ty.trunk ? new THREE.InstancedMesh(chunkGeo(trunkGeo[tt]), trunkMat, list.length) : null;
       crown.position.set(ox, 0, oz); if (trunk) trunk.position.set(ox, 0, oz);
@@ -554,6 +580,9 @@ class Renderer3D {
       });
     }
     const pedUpdate = (q, g) => {
+      const Pp = game.pos();
+      g.visible = Math.abs(q.x - Pp.x) < 110 && Math.abs(q.y - Pp.y) < 110;
+      if (!g.visible) return;
       const gy = this.w.terrain.at(q.x, q.y);
       g.position.set(q.x, gy, q.y); g.rotation.y = -q.a;
       const u = g.userData;

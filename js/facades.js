@@ -180,6 +180,30 @@ SB.buildFacades = function (THREE) {
   return out;
 };
 
+// Todas las fachadas en una sola textura (atlas) para dibujar los edificios de cada zona de una vez.
+// Cada celda lleva 8 px de margen con el dibujo repetido para que no se vean costuras.
+SB.buildFacadeAtlas = function (THREE) {
+  const PAD = 8, CELL = S + PAD * 2, COLS = 7, AW = 1024, AH = 512;
+  const c = document.createElement('canvas'); c.width = AW; c.height = AH;
+  const g = c.getContext('2d');
+  const cells = {}, tint = {};
+  let n = 0;
+  const put = (key, def) => {
+    const [tc, tg] = canvas(); def.draw(tg);
+    const col = n % COLS, row = Math.floor(n / COLS), x0 = col * CELL, y0 = row * CELL; n++;
+    g.save(); g.beginPath(); g.rect(x0, y0, CELL, CELL); g.clip();
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) g.drawImage(tc, x0 + PAD + dx * S, y0 + PAD + dy * S);
+    g.restore();
+    cells[key] = [(x0 + PAD) / AW, 1 - (y0 + PAD + S) / AH];
+    tint[key] = def.tint;
+  };
+  for (const k in UPPER) put('u_' + k, UPPER[k]);
+  for (const k in GROUND) put('g_' + k, GROUND[k]);
+  const tex = new THREE.CanvasTexture(c);
+  tex.anisotropy = 4;
+  return { tex, cells, tint, size: [S / AW, S / AH] };
+};
+
 // ---------- Atlas de textos ----------
 const CW = 256, CHh = 32, AS = 1024, COLS = AS / CW, ROWS = AS / CHh;
 const SIGN_STYLE = {
