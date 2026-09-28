@@ -42,9 +42,9 @@ function compact(json) {
 }
 
 // Una petición a Overpass probando los servidores en orden
-async function query(q, label, timeoutMs) {
+async function query(q, label, timeoutMs, maxMirrors = MIRRORS.length) {
   const body = 'data=' + encodeURIComponent(q);
-  for (const url of MIRRORS) {
+  for (const url of MIRRORS.slice(0, maxMirrors)) {
     const t0 = Date.now();
     try {
       const ctl = new AbortController();
@@ -68,7 +68,8 @@ async function query(q, label, timeoutMs) {
 // Si una parte es demasiado pesada, se parte el área en 4 cuadrantes (y cada uno en 4 si hace falta)
 async function fetchArea(part, bb, depth, label) {
   const q = SB.partQuery(part, bb).replace('[timeout:90]', '[timeout:120]');
-  const json = await query(q, label, depth === 0 ? 150000 : 130000);
+  // con el área entera sólo probamos 2 servidores: si no pueden, mejor trocear que esperar
+  const json = await query(q, label, depth === 0 ? 120000 : 130000, depth === 0 ? 2 : MIRRORS.length);
   if (json) return json.elements;
   if (depth >= 2) return null;
   console.log(`  ${label}: demasiado grande, se divide en 4 trozos`);
