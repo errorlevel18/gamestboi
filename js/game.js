@@ -80,10 +80,17 @@ class Game {
   }
 
   resize() {
+    if (this.r3d) this.r3d.resize();
     const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     this.dpr = dpr;
     this.canvas.width = Math.floor(innerWidth * dpr); this.canvas.height = Math.floor(innerHeight * dpr);
     this.W = this.canvas.width; this.H = this.canvas.height;
+  }
+
+  setView(v3d) {
+    this.view3d = v3d && !!this.r3d;
+    if (this.r3d) this.r3d.renderer.domElement.style.display = this.view3d ? 'block' : 'none';
+    try { localStorage.setItem('santboi-view', this.view3d ? '3d' : '2d'); } catch (e) { /* nada */ }
   }
 
   msg(text, dur = 3, big = false) { this.msgs.push({ text, t: dur, big }); }
@@ -266,7 +273,9 @@ class Game {
     this.time += dt;
     for (const m of this.msgs) m.t -= dt;
     if (this.msgs.length && this.msgs[0].t <= 0) this.msgs.shift();
+    this.lastDt = dt;
     if (this.pressed.KeyM) this.showMap = !this.showMap;
+    if (this.pressed.KeyC || this.pressed.KeyV) this.setView(!this.view3d);
     if (this.pressed.KeyP || this.pressed.Escape) this.paused = !this.paused;
     if (this.paused) { this.pressed = {}; return; }
 
@@ -322,6 +331,18 @@ class Game {
     }
     this.playerInput = null;
     let mx = inp.x, my = inp.y;
+    if (this.view3d) {
+      // en 3D: izquierda/derecha giran, arriba/abajo avanzan (relativo a la cámara)
+      p.a += inp.x * 3 * dt;
+      const f = -inp.y;
+      mx = Math.cos(p.a) * f; my = Math.sin(p.a) * f;
+      if (Math.abs(f) > 0.1) {
+        const sp = (inp.run ? 6.5 : 3.4) * (f < 0 ? 0.6 : 1);
+        p.x += mx * sp * dt; p.y += my * sp * dt;
+        p.walk += dt * sp * 2.2;
+      }
+      mx = my = 0;
+    }
     const L = Math.hypot(mx, my);
     if (L > 0.1) {
       mx /= Math.max(1, L); my /= Math.max(1, L);
@@ -964,6 +985,18 @@ class Game {
 
   // ---------- render ----------
   render() {
+    if (this.view3d) {
+      this.r3d.render(this, this.lastDt || 0.016);
+      const g = this.ctx;
+      g.clearRect(0, 0, this.W, this.H);
+      this.drawArrow3d(g);
+      if (this.flash) { g.fillStyle = `rgba(255,220,150,${this.flash * 2})`; g.fillRect(0, 0, this.W, this.H); }
+      if (this.hurtFlash) { g.fillStyle = `rgba(200,0,0,${this.hurtFlash})`; g.fillRect(0, 0, this.W, this.H); }
+      this.drawMinimap();
+      if (this.showMap) this.drawBigMap();
+      this.updateHud();
+      return;
+    }
     const g = this.ctx, W = this.W, H = this.H, cam = this.cam, Z = cam.z;
     this.w.drawGround(g, cam, W, H);
     const S = (x, y) => [(x - cam.x) * Z + W / 2, (y - cam.y) * Z + H / 2];
@@ -1127,6 +1160,24 @@ class Game {
       g.fillStyle = '#fff'; g.font = `bold ${Math.round(12 * s)}px system-ui`; g.textAlign = 'center';
       g.fillText(`${Math.round(dist(tg, P))} m`, ax - Math.cos(a) * 30 * s, ay - Math.sin(a) * 30 * s);
     }
+  }
+
+  // Flecha tipo brújula arriba de la pantalla apuntando al objetivo
+  drawArrow3d(g) {
+    const P = this.pos();
+    let t = this.target(), color = '#ffd21f';
+    if (!t) { let bd = Infinity; for (const s of this.starts) { const d = dist(s, P); if (d < bd) { bd = d; t = s; } } color = '#35d46a'; }
+    if (!t) return;
+    const yaw = this.r3d.yaw == null ? 0 : this.r3d.yaw;
+    const rel = angDiff(yaw, Math.atan2(t.y - P.y, t.x - P.x));
+    const s = this.dpr, cx = this.W / 2, cy = (this.mission ? 120 : 50) * s;
+    g.save(); g.translate(cx, cy); g.rotate(rel);
+    g.fillStyle = color; g.strokeStyle = '#000'; g.lineWidth = 2 * s;
+    g.beginPath(); g.moveTo(0, -20 * s); g.lineTo(13 * s, 12 * s); g.lineTo(0, 5 * s); g.lineTo(-13 * s, 12 * s); g.closePath(); g.fill(); g.stroke();
+    g.restore();
+    g.fillStyle = '#fff'; g.strokeStyle = '#000'; g.lineWidth = 3 * s; g.font = `bold ${Math.round(13 * s)}px system-ui`; g.textAlign = 'center';
+    const txt = `${Math.round(dist(t, P))} m`;
+    g.strokeText(txt, cx, cy + 34 * s); g.fillText(txt, cx, cy + 34 * s);
   }
 
   drawMinimap() {

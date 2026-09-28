@@ -1,0 +1,486 @@
+// Vista 3D en tercera persona (Three.js): edificios extruidos de OSM y cámara detrás del jugador
+'use strict';
+(function () {
+const SB = window.SB;
+const CH = 200; // tamaño de trozo (m) para descartar geometría fuera de cámara
+const TAU = Math.PI * 2;
+const angDiff = (a, b) => { let d = (b - a) % TAU; if (d > Math.PI) d -= TAU; if (d < -Math.PI) d += TAU; return d; };
+
+const WALLS = ['#e8dcc8', '#d9c7a8', '#cfc3b3', '#e6d2b5', '#c9b49a', '#ddd4c6', '#bfae9a', '#e3c9a8', '#d8b9a0', '#f0e6d6'];
+const Y = { ground: 0, water: 0.02, area: 0.04, plaza: 0.05, rail: 0.07, path: 0.08, sidewalk: 0.1, road: 0.14, line: 0.17 };
+
+function col(hex) { return new THREE.Color(hex); }
+function hash(i) { return ((i * 2654435761) >>> 0) / 4294967296; }
+
+// Acumulador de triángulos por trozo y material
+class Batches {
+  constructor() { this.map = new Map(); }
+  get(x, z, mat) {
+    const k = Math.floor(x / CH) + ',' + Math.floor(z / CH) + ',' + mat;
+    let b = this.map.get(k);
+    if (!b) { b = { mat, p: [], c: [], uv: [] }; this.map.set(k, b); }
+    return b;
+  }
+}
+function pushTri(b, ax, ay, az, bx, by, bz, cx, cy, cz, c) {
+  b.p.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+  b.c.push(c.r, c.g, c.b, c.r, c.g, c.b, c.r, c.g, c.b);
+}
+
+class Renderer3D {
+  constructor(world, canvas) {
+    this.w = world;
+    const R = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    R.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    this.scene = new THREE.Scene();
+    const sky = col('#9fc3e6');
+    this.scene.background = sky;
+    this.scene.fog = new THREE.Fog(sky, 160, 480);
+    this.camera = new THREE.PerspectiveCamera(62, 1, 0.4, 900);
+    this.scene.add(new THREE.HemisphereLight(0xe6f0ff, 0x8a7f6a, 0.62));
+    const sun = new THREE.DirectionalLight(0xfff0d8, 0.55); sun.position.set(-0.45, 1, -0.3); this.scene.add(sun);
+    this.mats = {
+      flat: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
+      wall: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, map: this.windowTexture() }),
+      roof: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
+    };
+    this.buildStatic();
+    this.buildDynamicPools();
+    this.meshes = new Map();
+    this.boxGeo = new THREE.BoxGeometry(1, 1, 1);
+    this.matCache = new Map();
+    this.yaw = null;
+    this.camPos = new THREE.Vector3();
+    this.resize();
+  }
+
+  resize() {
+    this.renderer.setSize(innerWidth, innerHeight, false);
+    this.camera.aspect = innerWidth / innerHeight;
+    this.camera.updateProjectionMatrix();
+  }
+
+  windowTexture() {
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, 64, 64);
+    g.fillStyle = '#e9e9e9'; g.fillRect(0, 58, 64, 6);
+    g.fillStyle = '#3d4a57'; g.fillRect(18, 14, 28, 34);
+    g.fillStyle = '#5d7085'; g.fillRect(20, 16, 11, 30);
+    g.fillStyle = '#9a8a78'; g.fillRect(14, 48, 36, 4);
+    const t = new THREE.CanvasTexture(c);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 4;
+    return t;
+  }
+
+  // ---------- geometría estática ----------
+  buildStatic() {
+    const m = this.w.map, B = new Batches();
+    const C = {
+      sidewalk: col('#d5cebf'), asphalt: col('#4a4c51'), major: col('#404247'), ped: col('#cdbfa3'), path: col('#c2ae8a'),
+      steps: col('#b09a7c'), water: col('#3d78b0'), green: col('#7fa65a'), wood: col('#5f8a45'), farm: col('#a9b16a'),
+      pitch: col('#5a9a4e'), sand: col('#e0d3a2'), cemetery: col('#8d9d78'), plaza: col('#cdc5b3'), rail: col('#6b5b4b'),
+      bridge: col('#8a8578'), line: col('#e9e4cf'),
+    };
+    // suelo
+    const b = this.w.bounds;
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(b.maxx - b.minx + 3000, b.maxy - b.miny + 3000),
+      new THREE.MeshLambertMaterial({ color: '#b3ab9a' }));
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.set((b.minx + b.maxx) / 2, 0, (b.miny + b.maxy) / 2);
+    this.scene.add(ground);
+
+    // áreas (parques, agua, plazas…)
+    for (const a of m.areas) {
+      const y = a.kind === 'water' ? Y.water : a.kind === 'plaza' ? Y.plaza : Y.area;
+      const c = C[a.kind] || C.green;
+      for (const ring of a.rings) this.polygon(B, ring, y, c);
+    }
+    // ríos como línea
+    for (const wl of m.waterLines) this.ribbon(B, wl.pts, wl.w, Y.water, C.water, true);
+    for (const r of m.rails) this.ribbon(B, r, 3, Y.rail, C.rail, false);
+    // calles
+    for (const r of m.roads) {
+      if (r.tunnel) continue;
+      if (r.drive) this.ribbon(B, r.pts, r.w + (r.rank >= 3 ? 4 : 1.5), Y.sidewalk, r.bridge ? C.bridge : C.sidewalk, true);
+    }
+    for (const r of m.roads) {
+      if (r.tunnel) continue;
+      const c = r.drive ? (r.rank >= 5 ? C.major : C.asphalt) : r.type === 'pedestrian' ? C.ped : r.type === 'steps' ? C.steps : C.path;
+      this.ribbon(B, r.pts, r.w, r.drive ? Y.road : Y.path, c, true);
+      if (r.drive && r.w >= 9 && !r.oneway) this.dashes(B, r.pts, C.line);
+    }
+    // edificios
+    this.w.buildings.forEach((bd, i) => this.building(B, bd, (m.bh && m.bh[i]) || 0, i));
+    this.trees();
+
+    for (const bt of B.map.values()) {
+      if (!bt.p.length) continue;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(bt.p, 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(bt.c, 3));
+      if (bt.mat === 'wall') g.setAttribute('uv', new THREE.Float32BufferAttribute(bt.uv, 2));
+      g.computeVertexNormals();
+      g.computeBoundingSphere();
+      const mesh = new THREE.Mesh(g, this.mats[bt.mat]);
+      mesh.matrixAutoUpdate = false;
+      this.scene.add(mesh);
+    }
+  }
+
+  polygon(B, ring, y, c) {
+    const pts = [];
+    const n = ring.length / 2 - (ring[0] === ring[ring.length - 2] && ring[1] === ring[ring.length - 1] ? 1 : 0);
+    if (n < 3) return;
+    for (let i = 0; i < n; i++) pts.push(new THREE.Vector2(ring[i * 2], ring[i * 2 + 1]));
+    let tris;
+    try { tris = THREE.ShapeUtils.triangulateShape(pts, []); } catch (e) { return; }
+    const bt = B.get(pts[0].x, pts[0].y, 'flat');
+    for (const t of tris) {
+      const a = pts[t[0]], b2 = pts[t[1]], d = pts[t[2]];
+      pushTri(bt, a.x, y, a.y, b2.x, y, b2.y, d.x, y, d.y, c);
+    }
+    return tris;
+  }
+
+  // Cinta con uniones redondeadas a lo largo de una polilínea
+  ribbon(B, p, width, y, c, joints) {
+    const hw = width / 2;
+    for (let i = 0; i + 3 < p.length; i += 2) {
+      const x1 = p[i], z1 = p[i + 1], x2 = p[i + 2], z2 = p[i + 3];
+      const dx = x2 - x1, dz = z2 - z1, L = Math.hypot(dx, dz);
+      if (L < 0.01) continue;
+      const nx = -dz / L * hw, nz = dx / L * hw;
+      const bt = B.get((x1 + x2) / 2, (z1 + z2) / 2, 'flat');
+      pushTri(bt, x1 + nx, y, z1 + nz, x2 + nx, y, z2 + nz, x2 - nx, y, z2 - nz, c);
+      pushTri(bt, x1 + nx, y, z1 + nz, x2 - nx, y, z2 - nz, x1 - nx, y, z1 - nz, c);
+    }
+    if (!joints) return;
+    const seg = hw > 4 ? 10 : 7;
+    for (let i = 0; i < p.length; i += 2) {
+      // sólo en extremos y en quiebros
+      if (i > 0 && i + 2 < p.length) {
+        const a1 = Math.atan2(p[i + 1] - p[i - 1], p[i] - p[i - 2]), a2 = Math.atan2(p[i + 3] - p[i + 1], p[i + 2] - p[i]);
+        if (Math.abs(angDiff(a1, a2)) < 0.12) continue;
+      }
+      const x = p[i], z = p[i + 1], bt = B.get(x, z, 'flat');
+      for (let k = 0; k < seg; k++) {
+        const a = k / seg * TAU, b2 = (k + 1) / seg * TAU;
+        pushTri(bt, x, y, z, x + Math.cos(a) * hw, y, z + Math.sin(a) * hw, x + Math.cos(b2) * hw, y, z + Math.sin(b2) * hw, c);
+      }
+    }
+  }
+
+  dashes(B, p, c) {
+    let acc = 0;
+    for (let i = 0; i + 3 < p.length; i += 2) {
+      const x1 = p[i], z1 = p[i + 1], dx = p[i + 2] - x1, dz = p[i + 3] - z1, L = Math.hypot(dx, dz);
+      if (L < 0.01) continue;
+      const ux = dx / L, uz = dz / L, nx = -uz * 0.12, nz = ux * 0.12;
+      for (let t = (3 - acc % 7 + 7) % 7; t < L; t += 7) {
+        const e = Math.min(L, t + 3);
+        const ax = x1 + ux * t, az = z1 + uz * t, bx = x1 + ux * e, bz = z1 + uz * e;
+        const bt = B.get(ax, az, 'flat');
+        pushTri(bt, ax + nx, Y.line, az + nz, bx + nx, Y.line, bz + nz, bx - nx, Y.line, bz - nz, c);
+        pushTri(bt, ax + nx, Y.line, az + nz, bx - nx, Y.line, bz - nz, ax - nx, Y.line, az - nz, c);
+      }
+      acc += L;
+    }
+  }
+
+  building(B, bd, h, i) {
+    const p = bd.pts;
+    if ((bd.bb[2] - bd.bb[0]) * (bd.bb[3] - bd.bb[1]) > 400000) return;
+    if (!h) h = 9 + Math.floor(hash(i) * 4) * 3.1; // entre 3 y 6 plantas si OSM no lo dice
+    const wallC = col(WALLS[Math.floor(hash(i + 7) * WALLS.length)]);
+    const roofC = col(bd.color);
+    const cx = (bd.bb[0] + bd.bb[2]) / 2, cz = (bd.bb[1] + bd.bb[3]) / 2;
+    const wb = B.get(cx, cz, 'wall');
+    const n = p.length / 2 - 1;
+    const floors = Math.max(1, Math.round(h / 3.1));
+    for (let k = 0; k < n; k++) {
+      const x1 = p[k * 2], z1 = p[k * 2 + 1], x2 = p[k * 2 + 2], z2 = p[k * 2 + 3];
+      const L = Math.hypot(x2 - x1, z2 - z1);
+      if (L < 0.05) continue;
+      const u = Math.max(1, Math.round(L / 3.6));
+      pushTri(wb, x1, 0, z1, x2, 0, z2, x2, h, z2, wallC);
+      pushTri(wb, x1, 0, z1, x2, h, z2, x1, h, z1, wallC);
+      wb.uv.push(0, 0, u, 0, u, floors, 0, 0, u, floors, 0, floors);
+    }
+    const pts = [];
+    for (let k = 0; k < n; k++) pts.push(new THREE.Vector2(p[k * 2], p[k * 2 + 1]));
+    let tris;
+    try { tris = THREE.ShapeUtils.triangulateShape(pts, []); } catch (e) { return; }
+    const rb = B.get(cx, cz, 'roof');
+    for (const t of tris) {
+      const a = pts[t[0]], b2 = pts[t[1]], d = pts[t[2]];
+      pushTri(rb, a.x, h, a.y, b2.x, h, b2.y, d.x, h, d.y, roofC);
+    }
+  }
+
+  // Árboles en parques y bosques (instanciados)
+  trees() {
+    const spots = [];
+    for (const a of this.w.map.areas) {
+      if (a.kind !== 'green' && a.kind !== 'wood') continue;
+      const ring = a.rings[0], bb = a.bb;
+      const area = (bb[2] - bb[0]) * (bb[3] - bb[1]);
+      const n = Math.min(400, Math.floor(area / (a.kind === 'wood' ? 90 : 220)));
+      for (let k = 0; k < n && spots.length < 4000; k++) {
+        const x = bb[0] + Math.random() * (bb[2] - bb[0]), z = bb[1] + Math.random() * (bb[3] - bb[1]);
+        let inside = false;
+        for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2)
+          if ((ring[i + 1] > z) !== (ring[j + 1] > z) && x < (ring[j] - ring[i]) * (z - ring[i + 1]) / (ring[j + 1] - ring[i + 1]) + ring[i]) inside = !inside;
+        if (inside && !this.w.isInsideBuilding(x, z)) spots.push([x, z, 0.8 + Math.random() * 0.6]);
+      }
+    }
+    if (!spots.length) return;
+    const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.26, 2.4, 6), new THREE.MeshLambertMaterial({ color: '#6b4f32' }), spots.length);
+    const crown = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(2, 0), new THREE.MeshLambertMaterial({ color: '#4f7d3a', flatShading: true }), spots.length);
+    const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), S = new THREE.Vector3(), P = new THREE.Vector3();
+    spots.forEach(([x, z, s], i) => {
+      S.set(s, s, s); P.set(x, 1.2 * s, z); M.compose(P, Q, S); trunk.setMatrixAt(i, M);
+      P.set(x, 3.4 * s, z); S.set(s * 1.1, s, s * 1.1); M.compose(P, Q, S); crown.setMatrixAt(i, M);
+    });
+    this.scene.add(trunk, crown);
+  }
+
+  // ---------- objetos dinámicos ----------
+  buildDynamicPools() {
+    // partículas
+    this.maxParts = 900;
+    const pg = new THREE.BufferGeometry();
+    pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(this.maxParts * 3), 3));
+    pg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(this.maxParts * 3), 3));
+    this.points = new THREE.Points(pg, new THREE.PointsMaterial({ size: 0.9, vertexColors: true, sizeAttenuation: true }));
+    this.points.frustumCulled = false;
+    this.scene.add(this.points);
+    // balas
+    const bg = new THREE.BufferGeometry();
+    bg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(200 * 6), 3));
+    this.bulletLines = new THREE.LineSegments(bg, new THREE.LineBasicMaterial({ color: '#ffe680' }));
+    this.bulletLines.frustumCulled = false;
+    this.scene.add(this.bulletLines);
+    // marcadores de misión
+    this.markers = [];
+    for (let i = 0; i < 6; i++) {
+      const g = new THREE.Group();
+      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 2.5, 24, 1, true),
+        new THREE.MeshBasicMaterial({ color: '#35d46a', transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }));
+      cyl.position.y = 1.25;
+      const ring = new THREE.Mesh(new THREE.RingGeometry(2.6, 3, 24), new THREE.MeshBasicMaterial({ color: '#35d46a', side: THREE.DoubleSide }));
+      ring.rotation.x = -Math.PI / 2; ring.position.y = 0.25;
+      const icon = new THREE.Mesh(new THREE.OctahedronGeometry(0.8), new THREE.MeshBasicMaterial({ color: '#35d46a' }));
+      icon.position.y = 3.5;
+      g.add(cyl, ring, icon); g.visible = false; g.userData = { cyl, ring, icon };
+      this.scene.add(g); this.markers.push(g);
+    }
+    // manchas en el suelo
+    this.decalMeshes = [];
+    const dg = new THREE.CircleGeometry(1, 14);
+    for (let i = 0; i < 60; i++) {
+      const d = new THREE.Mesh(dg, new THREE.MeshBasicMaterial({ color: '#7a0d0d', transparent: true, opacity: 0.8, depthWrite: false }));
+      d.rotation.x = -Math.PI / 2; d.position.y = Y.line + 0.02; d.visible = false;
+      this.scene.add(d); this.decalMeshes.push(d);
+    }
+    // billetes
+    this.cashMeshes = [];
+    for (let i = 0; i < 30; i++) {
+      const c = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.3, 0.35), new THREE.MeshLambertMaterial({ color: '#2ecc40', emissive: '#0b4d14' }));
+      c.visible = false; this.scene.add(c); this.cashMeshes.push(c);
+    }
+  }
+
+  mat(color, emissive) {
+    const k = color + '|' + (emissive || '');
+    let m = this.matCache.get(k);
+    if (!m) { m = new THREE.MeshLambertMaterial({ color, emissive: emissive || '#000000' }); this.matCache.set(k, m); }
+    return m;
+  }
+  box(parent, sx, sy, sz, x, y, z, color, emissive) {
+    const b = new THREE.Mesh(this.boxGeo, this.mat(color, emissive));
+    b.scale.set(sx, sy, sz); b.position.set(x, y, z);
+    parent.add(b);
+    return b;
+  }
+
+  makeCar(c) {
+    const g = new THREE.Group(), m = c.m, L = m.l, W = m.w;
+    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(L + 0.4, W + 0.4), new THREE.MeshBasicMaterial({ color: '#000', transparent: true, opacity: 0.3, depthWrite: false }));
+    shadow.rotation.x = -Math.PI / 2; shadow.position.y = Y.line + 0.01; g.add(shadow);
+    const parts = { body: [] };
+    if (m.bike) {
+      parts.body.push(this.box(g, L * 0.7, 0.45, 0.4, 0, 0.75, 0, c.color));
+      this.box(g, 0.65, 0.65, 0.12, L * 0.36, 0.33, 0, '#111'); this.box(g, 0.65, 0.65, 0.12, -L * 0.36, 0.33, 0, '#111');
+      const rider = new THREE.Group(); g.add(rider); parts.rider = rider;
+      this.box(rider, 0.45, 0.7, 0.45, -0.15, 1.35, 0, '#e67e22'); this.box(rider, 0.3, 0.3, 0.3, -0.1, 1.85, 0, '#222');
+    } else {
+      const van = m.van;
+      const bodyH = van ? 1.7 : 0.72, bodyY = van ? 1.1 : 0.62;
+      parts.body.push(this.box(g, L, bodyH, W, 0, bodyY, 0, c.color));
+      if (!van) {
+        this.box(g, L * 0.5, 0.52, W * 0.86, -L * 0.06, 1.22, 0, '#26303a');
+        parts.body.push(this.box(g, L * 0.44, 0.07, W * 0.8, -L * 0.08, 1.5, 0, c.color));
+      } else this.box(g, 0.08, 0.6, W * 0.84, L / 2, 1.55, 0, '#26303a');
+      for (const sx of [1, -1]) for (const sz of [1, -1]) this.box(g, 0.72, 0.72, 0.28, sx * L * 0.31, 0.36, sz * (W / 2 - 0.1), '#161616');
+      this.box(g, 0.06, 0.2, 0.4, L / 2 + 0.01, bodyY + 0.05, W / 2 - 0.35, '#fff6c9', '#aa9955');
+      this.box(g, 0.06, 0.2, 0.4, L / 2 + 0.01, bodyY + 0.05, -W / 2 + 0.35, '#fff6c9', '#aa9955');
+      this.box(g, 0.06, 0.18, 0.4, -L / 2 - 0.01, bodyY + 0.08, W / 2 - 0.35, '#b01010', '#550000');
+      this.box(g, 0.06, 0.18, 0.4, -L / 2 - 0.01, bodyY + 0.08, -W / 2 + 0.35, '#b01010', '#550000');
+      if (m.taxi) { this.box(g, L * 0.45, 0.42, W + 0.03, -L * 0.04, 0.62, 0, '#f5c518'); this.box(g, 0.3, 0.15, 0.3, -L * 0.1, 1.6, 0, '#39d353', '#1a7a2a'); }
+      if (m.police) {
+        this.box(g, L * 0.92, 0.18, W + 0.03, 0, 0.66, 0, '#1f4fbf');
+        parts.red = this.box(g, 0.35, 0.18, W * 0.38, -L * 0.08, 1.62, W * 0.2, '#7a1d1d');
+        parts.blue = this.box(g, 0.35, 0.18, W * 0.38, -L * 0.08, 1.62, -W * 0.2, '#1d2f7a');
+      }
+      if (m.sport) this.box(g, L * 1.001, 0.05, 0.35, 0, bodyY + bodyH / 2 + 0.005, 0, '#222');
+    }
+    g.userData = parts;
+    this.scene.add(g);
+    return g;
+  }
+
+  makePed(q, isPlayer) {
+    const g = new THREE.Group(), s = 1.12;
+    const shirt = isPlayer ? '#e67e22' : q.cop ? '#1f3a93' : q.shirt, pants = isPlayer ? '#1b2631' : q.pants;
+    const legL = new THREE.Group(), legR = new THREE.Group(), armL = new THREE.Group(), armR = new THREE.Group();
+    legL.position.set(0, 0.85 * s, 0.11 * s); legR.position.set(0, 0.85 * s, -0.11 * s);
+    armL.position.set(0, 1.42 * s, 0.3 * s); armR.position.set(0, 1.42 * s, -0.3 * s);
+    this.box(legL, 0.2 * s, 0.85 * s, 0.18 * s, 0, -0.42 * s, 0, pants);
+    this.box(legR, 0.2 * s, 0.85 * s, 0.18 * s, 0, -0.42 * s, 0, pants);
+    this.box(armL, 0.16 * s, 0.62 * s, 0.14 * s, 0, -0.3 * s, 0, shirt);
+    this.box(armR, 0.16 * s, 0.62 * s, 0.14 * s, 0, -0.3 * s, 0, shirt);
+    this.box(g, 0.28 * s, 0.62 * s, 0.46 * s, 0, 1.15 * s, 0, shirt);
+    this.box(g, 0.26 * s, 0.26 * s, 0.24 * s, 0.02 * s, 1.62 * s, 0, '#e0ac80');
+    this.box(g, 0.28 * s, 0.1 * s, 0.26 * s, -0.01 * s, 1.78 * s, 0, isPlayer ? '#111' : q.hair);
+    if (isPlayer) this.box(armL, 0.35 * s, 0.1 * s, 0.08 * s, 0.15 * s, -0.6 * s, 0, '#333');
+    g.add(legL, legR, armL, armR);
+    g.userData = { legL, legR, armL, armR };
+    this.scene.add(g);
+    return g;
+  }
+
+  syncEntities(game) {
+    const seen = new Set();
+    const sync = (key, make, update) => {
+      let o = this.meshes.get(key);
+      if (!o) { o = make(); this.meshes.set(key, o); }
+      seen.add(key); update(o);
+    };
+    const t = game.time;
+    for (const c of game.cars) {
+      sync('c' + c.id, () => this.makeCar(c), (g) => {
+        g.position.set(c.x, 0, c.y); g.rotation.y = -c.a;
+        const u = g.userData;
+        if (c.dead && !u.burnt) { u.burnt = true; for (const b of u.body) b.material = this.mat('#252525'); }
+        if (u.rider) u.rider.visible = !!c.driver;
+        if (u.red) {
+          const on = game.stars > 0 && c.driver === 'cop' && !c.dead, ph = Math.floor(t * 8) % 2;
+          u.red.material = this.mat(on && ph ? '#ff2d2d' : '#7a1d1d', on && ph ? '#ff0000' : null);
+          u.blue.material = this.mat(on && !ph ? '#2d6dff' : '#1d2f7a', on && !ph ? '#0033ff' : null);
+        }
+      });
+    }
+    const pedUpdate = (q, g) => {
+      g.position.set(q.x, 0, q.y); g.rotation.y = -q.a;
+      const u = g.userData;
+      if (q.state === 'dead') { g.rotation.z = -Math.PI / 2; g.position.y = 0.3; return; }
+      g.rotation.z = 0;
+      const sw = Math.sin(q.walk || 0) * 0.6;
+      u.legL.rotation.z = sw; u.legR.rotation.z = -sw; u.armL.rotation.z = -sw * 0.8; u.armR.rotation.z = sw * 0.8;
+    };
+    for (const q of game.peds) sync('p' + q.id, () => this.makePed(q, false), (g) => pedUpdate(q, g));
+    const p = game.player;
+    if (!p.car && !(game.dead && game.dead.kind === 'busted' && false)) {
+      sync('player', () => this.makePed(p, true), (g) => pedUpdate(game.dead ? { ...p, state: 'dead' } : p, g));
+    }
+    for (const [k, o] of this.meshes) if (!seen.has(k)) { this.scene.remove(o); this.meshes.delete(k); }
+
+    // partículas
+    const pos = this.points.geometry.attributes.position, colA = this.points.geometry.attributes.color;
+    const n = Math.min(game.parts.length, this.maxParts), tmp = new THREE.Color();
+    for (let i = 0; i < n; i++) {
+      const q = game.parts[i];
+      const up = q.grow ? 0.8 + (q.max - q.life) * 2.5 : 0.8;
+      pos.setXYZ(i, q.x, up, q.y);
+      tmp.set(q.color); const f = Math.max(0.2, q.life / q.max); colA.setXYZ(i, tmp.r * f + 0.1, tmp.g * f + 0.1, tmp.b * f + 0.1);
+    }
+    pos.needsUpdate = true; colA.needsUpdate = true;
+    this.points.geometry.setDrawRange(0, n);
+    // balas
+    const bp = this.bulletLines.geometry.attributes.position;
+    const nb = Math.min(game.bullets.length, 200);
+    for (let i = 0; i < nb; i++) {
+      const b = game.bullets[i];
+      bp.setXYZ(i * 2, b.x, 1.2, b.y); bp.setXYZ(i * 2 + 1, b.x - b.vx * 0.015, 1.2, b.y - b.vy * 0.015);
+    }
+    bp.needsUpdate = true; this.bulletLines.geometry.setDrawRange(0, nb * 2);
+    // marcadores
+    const marks = [];
+    if (!game.mission) for (const s of game.starts) marks.push([s.x, s.y, '#35d46a']);
+    else { const st = game.target(); if (st && !st.car) marks.push([st.x, st.y, '#ffd21f']); else if (st && st.car) marks.push([st.x, st.y, '#ffd21f', true]); }
+    this.markers.forEach((mk, i) => {
+      const d = marks[i];
+      mk.visible = !!d;
+      if (!d) return;
+      mk.position.set(d[0], 0, d[1]);
+      const u = mk.userData;
+      u.cyl.visible = u.ring.visible = !d[3];
+      u.icon.position.y = d[3] ? 3.2 : 3.5 + Math.sin(t * 3) * 0.3; u.icon.rotation.y = t * 2;
+      for (const o of [u.cyl, u.ring, u.icon]) o.material.color.set(d[2]);
+    });
+    this.decalMeshes.forEach((m, i) => {
+      const d = game.decals[game.decals.length - 1 - i];
+      m.visible = !!d;
+      if (d) { m.position.x = d.x; m.position.z = d.y; m.scale.setScalar(d.r); m.material.color.set(d.r > 3 ? '#1a1a1a' : '#7a0d0d'); }
+    });
+    this.cashMeshes.forEach((m, i) => {
+      const k = game.pickups[i];
+      m.visible = !!k;
+      if (k) { m.position.set(k.x, 0.5 + Math.sin(t * 4 + i) * 0.15, k.y); m.rotation.y = t * 2; }
+    });
+  }
+
+  // ---------- cámara ----------
+  updateCamera(game, dt) {
+    const P = game.pos(), car = game.player.car, w = this.w;
+    const sp = car ? Math.hypot(car.vx, car.vy) : 0;
+    let yawT = car ? car.a : game.player.a;
+    if (car) {
+      // si vamos marcha atrás rápido, la cámara no gira
+      const vf = car.vx * Math.cos(car.a) + car.vy * Math.sin(car.a);
+      if (vf < -4) yawT = this.yaw;
+    }
+    if (this.yaw === null) this.yaw = yawT;
+    this.yaw += angDiff(this.yaw, yawT) * Math.min(1, dt * (car ? 3.2 : 5));
+    const want = car ? 8.5 + sp * 0.1 : 5;
+    let d = want;
+    for (let s = 1.2; s <= want; s += 0.6) {
+      if (w.isInsideBuilding(P.x - Math.cos(this.yaw) * s, P.y - Math.sin(this.yaw) * s)) { d = Math.max(1.2, s - 0.8); break; }
+    }
+    const h = (car ? 3.4 + sp * 0.025 : 2.5) + (want - d) * 0.45;
+    const tx = P.x - Math.cos(this.yaw) * d, tz = P.y - Math.sin(this.yaw) * d;
+    if (!this.camInit) { this.camPos.set(tx, h, tz); this.camInit = true; }
+    const k = Math.min(1, dt * 8);
+    this.camPos.x += (tx - this.camPos.x) * k; this.camPos.z += (tz - this.camPos.z) * k; this.camPos.y += (h - this.camPos.y) * k;
+    this.camera.position.copy(this.camPos);
+    const look = car ? 5 : 3;
+    this.camera.lookAt(P.x + Math.cos(this.yaw) * look, car ? 1.2 : 1.4, P.y + Math.sin(this.yaw) * look);
+    const fov = 62 + Math.min(14, sp * 0.3);
+    if (Math.abs(this.camera.fov - fov) > 0.1) { this.camera.fov = fov; this.camera.updateProjectionMatrix(); }
+  }
+
+  render(game, dt) {
+    this.syncEntities(game);
+    this.updateCamera(game, dt);
+    this.renderer.render(this.scene, this.camera);
+  }
+}
+
+SB.Renderer3D = Renderer3D;
+SB.webglAvailable = function () {
+  try { const c = document.createElement('canvas'); return !!(window.WebGLRenderingContext && (c.getContext('webgl2') || c.getContext('webgl'))); }
+  catch (e) { return false; }
+};
+})();

@@ -58,6 +58,12 @@ function start() {
     };
     game = new SB.Game(world, $('game'), hud);
     window.game = game;
+    if (window.THREE && SB.webglAvailable()) {
+      try { game.r3d = new SB.Renderer3D(world, $('game3d')); game.r3d.resize(); } catch (e) { console.warn('Sin 3D', e); }
+    }
+    let pref = '3d';
+    try { pref = localStorage.getItem('santboi-view') || '3d'; } catch (e) { /* nada */ }
+    game.setView(pref === '3d');
     game.audio.unlock();
     $('title').style.display = 'none';
     $('hud').classList.add('on');
@@ -109,6 +115,8 @@ const hold = (el, on, off) => {
 hold($('tFire'), () => { game.touch.fire = true; }, () => { game.touch.fire = false; });
 hold($('tEnter'), () => { game.pressed.KeyE = true; });
 hold($('tMap'), () => { game.pressed.KeyM = true; });
+hold($('tCam'), () => { game.pressed.KeyC = true; });
+$('cam').onclick = () => { if (game) game.pressed.KeyC = true; };
 
 load(false);
 })();

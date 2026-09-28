@@ -1,7 +1,9 @@
 # Grand Theft Sant Boi
 
-Juego de acción en el navegador con vista cenital, al estilo de los primeros GTA, ambientado en
-**Sant Boi de Llobregat** con sus calles reales. Las calles, los edificios, los parques, el río
+Juego de acción en el navegador ambientado en **Sant Boi de Llobregat** con sus calles reales.
+Tiene **vista 3D en tercera persona** (cámara detrás del coche o del personaje, como los GTA
+modernos), con los edificios levantados a su altura real, y también una **vista cenital** clásica
+tipo GTA 1/2. Se cambia de una a otra con la tecla `C`. Las calles, los edificios, los parques, el río
 Llobregat, las vías del tren y los barrios salen de [OpenStreetMap](https://www.openstreetmap.org).
 
 ## Cómo jugar
@@ -24,9 +26,11 @@ veces arranca al momento. Si no hay conexión, puedes jugar con un mapa aproxima
 | Disparar (a pie) / freno de mano (en coche) | `Espacio` |
 | Robar un coche / bajar | `E` |
 | Claxon | `H` |
+| Cambiar cámara 3D / desde arriba | `C` |
 | Mapa completo | `M` |
 | Pausa | `P` o `Esc` |
 
+En la vista 3D, a pie, `A`/`D` giran al personaje y `W`/`S` lo mueven adelante y atrás.
 En el móvil salen un joystick y unos botones táctiles.
 
 ### Qué hay en el juego
@@ -48,6 +52,8 @@ botón **Cargar JSON de Overpass** de la pantalla de inicio.
 ## Estructura
 
 - `js/data.js`: descarga y procesa los datos de OpenStreetMap y genera el mapa de reserva.
+- `js/render3d.js`: vista 3D con Three.js (edificios extruidos, árboles, coches, peatones y cámara de persecución).
+- `js/vendor/three.min.js`: Three.js r149 (licencia MIT).
 - `js/world.js`: índices espaciales, grafo de calles, colisiones y render del mapa por teselas.
 - `js/game.js`: jugador, física de coches, IA de tráfico, peatones, policía, misiones y HUD.
 - `js/audio.js`: efectos de sonido sintetizados con WebAudio.

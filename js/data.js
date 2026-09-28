@@ -12,7 +12,7 @@ const MIRRORS = [
   'https://overpass.private.coffee/api/interpreter',
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ];
-const CACHE_KEY = 'santboi-map-v1';
+const CACHE_KEY = 'santboi-map-v2';
 
 function buildQuery(b) {
   const bb = `${b.s},${b.w},${b.n},${b.e}`;
@@ -69,6 +69,20 @@ function areaKind(t) {
   return null;
 }
 
+// Altura del edificio en metros (0 = desconocida)
+function buildingHeight(t) {
+  const h = parseFloat(t.height);
+  if (h > 0) return Math.min(h, 120);
+  const lv = parseFloat(t['building:levels']);
+  if (lv > 0) return Math.min(lv * 3.1 + 0.8, 120);
+  const b = t.building;
+  if (b === 'garage' || b === 'garages' || b === 'shed' || b === 'roof' || b === 'hut' || b === 'kiosk') return 3.5;
+  if (b === 'house' || b === 'detached' || b === 'semidetached_house' || b === 'terrace') return 8;
+  if (b === 'industrial' || b === 'warehouse' || b === 'retail' || b === 'supermarket') return 9;
+  if (b === 'church' || b === 'cathedral') return 18;
+  return 0;
+}
+
 function geomToFlat(g) {
   const out = new Array(g.length * 2);
   for (let i = 0; i < g.length; i++) { out[i * 2] = px(g[i].lon); out[i * 2 + 1] = py(g[i].lat); }
@@ -105,7 +119,7 @@ function assembleRings(members) {
 
 // Convierte la respuesta de Overpass en el formato interno del juego
 SB.processOSM = function (osm) {
-  const map = { roads: [], buildings: [], areas: [], waterLines: [], rails: [], pois: [], places: [], source: 'osm' };
+  const map = { roads: [], buildings: [], areas: [], waterLines: [], rails: [], pois: [], places: [], bh: [], source: 'osm' };
   for (const el of osm.elements || []) {
     const t = el.tags || {};
     if (el.type === 'node') {
@@ -146,6 +160,7 @@ SB.processOSM = function (osm) {
     }
     if (t.building && closed) {
       map.buildings.push(pts);
+      map.bh.push(buildingHeight(t));
       if (t.name && (t.amenity === 'townhall' || t.amenity === 'hospital' || t.amenity === 'police' || t.amenity === 'place_of_worship' || t.amenity === 'marketplace')) {
         let cx = 0, cy = 0; const n = pts.length / 2;
         for (let i = 0; i < pts.length; i += 2) { cx += pts[i]; cy += pts[i + 1]; }
