@@ -409,7 +409,7 @@ class Game {
 
   shoot() {
     const p = this.player;
-    p.shootCd = 0.25;
+    p.shootCd = 0.25; p.aim = this.time + 0.6;
     let a = p.a;
     // autoapuntado suave
     let best = null, bs = 0.45;

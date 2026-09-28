@@ -70,6 +70,7 @@ class Renderer3D {
     this.buildDynamicPools();
     this.meshes = new Map();
     this.boxGeo = new THREE.BoxGeometry(1, 1, 1);
+    this.models = new SB.Models(THREE);
     this.matCache = new Map();
     this.yaw = null;
     this.camPos = new THREE.Vector3();
@@ -500,57 +501,25 @@ class Renderer3D {
   }
 
   makeCar(c) {
-    const g = new THREE.Group(), m = c.m, L = m.l, W = m.w;
-    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(L + 0.4, W + 0.4), new THREE.MeshBasicMaterial({ color: '#000', transparent: true, opacity: 0.3, depthWrite: false }));
-    shadow.rotation.x = -Math.PI / 2; shadow.position.y = Y.line + 0.01; g.add(shadow);
-    const parts = { body: [] };
-    if (m.bike) {
-      parts.body.push(this.box(g, L * 0.7, 0.45, 0.4, 0, 0.75, 0, c.color));
-      this.box(g, 0.65, 0.65, 0.12, L * 0.36, 0.33, 0, '#111'); this.box(g, 0.65, 0.65, 0.12, -L * 0.36, 0.33, 0, '#111');
-      const rider = new THREE.Group(); g.add(rider); parts.rider = rider;
-      this.box(rider, 0.45, 0.7, 0.45, -0.15, 1.35, 0, '#e67e22'); this.box(rider, 0.3, 0.3, 0.3, -0.1, 1.85, 0, '#222');
-    } else {
-      const van = m.van;
-      const bodyH = van ? 1.7 : 0.72, bodyY = van ? 1.1 : 0.62;
-      parts.body.push(this.box(g, L, bodyH, W, 0, bodyY, 0, c.color));
-      if (!van) {
-        this.box(g, L * 0.5, 0.52, W * 0.86, -L * 0.06, 1.22, 0, '#26303a');
-        parts.body.push(this.box(g, L * 0.44, 0.07, W * 0.8, -L * 0.08, 1.5, 0, c.color));
-      } else this.box(g, 0.08, 0.6, W * 0.84, L / 2, 1.55, 0, '#26303a');
-      for (const sx of [1, -1]) for (const sz of [1, -1]) this.box(g, 0.72, 0.72, 0.28, sx * L * 0.31, 0.36, sz * (W / 2 - 0.1), '#161616');
-      this.box(g, 0.06, 0.2, 0.4, L / 2 + 0.01, bodyY + 0.05, W / 2 - 0.35, '#fff6c9', '#aa9955');
-      this.box(g, 0.06, 0.2, 0.4, L / 2 + 0.01, bodyY + 0.05, -W / 2 + 0.35, '#fff6c9', '#aa9955');
-      this.box(g, 0.06, 0.18, 0.4, -L / 2 - 0.01, bodyY + 0.08, W / 2 - 0.35, '#b01010', '#550000');
-      this.box(g, 0.06, 0.18, 0.4, -L / 2 - 0.01, bodyY + 0.08, -W / 2 + 0.35, '#b01010', '#550000');
-      if (m.taxi) { this.box(g, L * 0.45, 0.42, W + 0.03, -L * 0.04, 0.62, 0, '#f5c518'); this.box(g, 0.3, 0.15, 0.3, -L * 0.1, 1.6, 0, '#39d353', '#1a7a2a'); }
-      if (m.police) {
-        this.box(g, L * 0.92, 0.18, W + 0.03, 0, 0.66, 0, '#1f4fbf');
-        parts.red = this.box(g, 0.35, 0.18, W * 0.38, -L * 0.08, 1.62, W * 0.2, '#7a1d1d');
-        parts.blue = this.box(g, 0.35, 0.18, W * 0.38, -L * 0.08, 1.62, -W * 0.2, '#1d2f7a');
-      }
-      if (m.sport) this.box(g, L * 1.001, 0.05, 0.35, 0, bodyY + bodyH / 2 + 0.005, 0, '#222');
-    }
-    g.userData = parts;
+    const g = this.models.car(c.m, c.color);
     this.scene.add(g);
     return g;
   }
 
   makePed(q, isPlayer) {
-    const g = new THREE.Group(), s = 1.12;
-    const shirt = isPlayer ? '#e67e22' : q.cop ? '#1f3a93' : q.shirt, pants = isPlayer ? '#1b2631' : q.pants;
-    const legL = new THREE.Group(), legR = new THREE.Group(), armL = new THREE.Group(), armR = new THREE.Group();
-    legL.position.set(0, 0.85 * s, 0.11 * s); legR.position.set(0, 0.85 * s, -0.11 * s);
-    armL.position.set(0, 1.42 * s, 0.3 * s); armR.position.set(0, 1.42 * s, -0.3 * s);
-    this.box(legL, 0.2 * s, 0.85 * s, 0.18 * s, 0, -0.42 * s, 0, pants);
-    this.box(legR, 0.2 * s, 0.85 * s, 0.18 * s, 0, -0.42 * s, 0, pants);
-    this.box(armL, 0.16 * s, 0.62 * s, 0.14 * s, 0, -0.3 * s, 0, shirt);
-    this.box(armR, 0.16 * s, 0.62 * s, 0.14 * s, 0, -0.3 * s, 0, shirt);
-    this.box(g, 0.28 * s, 0.62 * s, 0.46 * s, 0, 1.15 * s, 0, shirt);
-    this.box(g, 0.26 * s, 0.26 * s, 0.24 * s, 0.02 * s, 1.62 * s, 0, '#e0ac80');
-    this.box(g, 0.28 * s, 0.1 * s, 0.26 * s, -0.01 * s, 1.78 * s, 0, isPlayer ? '#111' : q.hair);
-    if (isPlayer) this.box(armL, 0.35 * s, 0.1 * s, 0.08 * s, 0.15 * s, -0.6 * s, 0, '#333');
-    g.add(legL, legR, armL, armR);
-    g.userData = { legL, legR, armL, armR };
+    // aspecto variado y estable para cada peatón (derivado de su id)
+    const r = (k) => hash(q.id * 7 + k);
+    const woman = !isPlayer && r(1) < 0.5;
+    const SKIN = ['#f1c7a5', '#e0ac80', '#c68d63', '#8d5a3b', '#f5d0b5'];
+    const o = isPlayer
+      ? { shirt: '#e67e22', pants: '#1b2631', hair: '#111', skin: '#d9a47a', player: true, longSleeve: true, shoes: '#111' }
+      : {
+        shirt: q.cop ? '#1f3a93' : q.shirt, pants: q.cop ? '#1b2631' : q.pants, hair: q.hair, skin: SKIN[Math.floor(r(2) * SKIN.length)],
+        woman, skirt: woman && r(3) < 0.35, hairStyle: woman ? (r(4) < 0.7 ? 'long' : 'short') : r(4) < 0.12 ? 'bald' : 'short',
+        longSleeve: r(5) < 0.4, shoes: ['#222', '#eee', '#5d4037', '#b71c1c'][Math.floor(r(6) * 4)], cap: q.cop ? '#1b2631' : r(7) < 0.1 ? '#c0392b' : null,
+      };
+    const g = this.models.ped(o);
+    const s = 0.94 + r(8) * 0.12; g.scale.setScalar(isPlayer ? 1.02 : s);
     this.scene.add(g);
     return g;
   }
@@ -575,6 +544,8 @@ class Renderer3D {
         const u = g.userData;
         if (c.dead && !u.burnt) { u.burnt = true; for (const b of u.body) b.material = this.mat('#252525'); }
         if (u.rider) u.rider.visible = !!c.driver;
+        const steer = c.driver === 'player' && game.playerInput ? game.playerInput.steer : (c.av || 0) * 0.5;
+        this.models.animateCar(g, c, this.dt || 0.016, steer);
         if (u.red) {
           const on = game.stars > 0 && c.driver === 'cop' && !c.dead, ph = Math.floor(t * 8) % 2;
           u.red.material = this.mat(on && ph ? '#ff2d2d' : '#7a1d1d', on && ph ? '#ff0000' : null);
@@ -586,10 +557,15 @@ class Renderer3D {
       const gy = this.w.terrain.at(q.x, q.y);
       g.position.set(q.x, gy, q.y); g.rotation.y = -q.a;
       const u = g.userData;
-      if (q.state === 'dead') { g.rotation.z = -Math.PI / 2; g.position.y = gy + 0.3; return; }
+      if (q.state === 'dead') { g.rotation.z = Math.PI / 2; g.position.y = gy + 0.15; this.models.pose(g, 0, 0); return; }
       g.rotation.z = 0;
-      const sw = Math.sin(q.walk || 0) * 0.6;
-      u.legL.rotation.z = sw; u.legR.rotation.z = -sw; u.armL.rotation.z = -sw * 0.8; u.armR.rotation.z = sw * 0.8;
+      // amplitud según lo rápido que se mueve (quieto / andando / corriendo)
+      const px = q._px === undefined ? q.x : q._px, py = q._py === undefined ? q.y : q._py;
+      const v = Math.hypot(q.x - px, q.y - py) / Math.max(this.dt || 0.016, 0.001);
+      q._px = q.x; q._py = q.y;
+      q._amp = (q._amp || 0) + (Math.min(1, v / 6.5) - (q._amp || 0)) * 0.2;
+      const amp = v > 0.3 ? Math.max(0.35, q._amp) : q._amp * 0.8;
+      this.models.pose(g, (q.walk || 0) * 1.1, amp, q.aim > game.time ? 'aim' : null);
     };
     for (const q of game.peds) sync('p' + q.id, () => this.makePed(q, false), (g) => pedUpdate(q, g));
     const p = game.player;
@@ -732,6 +708,7 @@ class Renderer3D {
   }
 
   render(game, dt) {
+    this.dt = dt;
     this.updateTerrain(game);
     this.syncEntities(game);
     this.updateCamera(game, dt);
