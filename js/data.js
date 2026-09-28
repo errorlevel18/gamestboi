@@ -12,7 +12,7 @@ const MIRRORS = [
   'https://overpass.private.coffee/api/interpreter',
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ];
-const CACHE_KEY = 'santboi-map-v3';
+const CACHE_KEY = 'santboi-map-v4';
 
 function buildQuery(b) {
   const bb = `${b.s},${b.w},${b.n},${b.e}`;
@@ -20,14 +20,16 @@ function buildQuery(b) {
 (
   way["highway"](${bb});
   way["building"](${bb});
-  way["leisure"~"^(park|garden|pitch|playground|stadium|sports_centre|track)$"](${bb});
-  way["landuse"~"^(grass|forest|meadow|farmland|orchard|recreation_ground|cemetery|village_green|allotments|vineyard)$"](${bb});
-  way["natural"~"^(water|wood|scrub|grassland|beach|sand|wetland)$"](${bb});
+  way["leisure"~"^(park|garden|pitch|playground|stadium|sports_centre|track|dog_park|nature_reserve)$"](${bb});
+  way["landuse"~"^(grass|forest|meadow|farmland|orchard|recreation_ground|cemetery|village_green|allotments|vineyard|flowerbed|plant_nursery)$"](${bb});
+  way["natural"~"^(water|wood|scrub|grassland|beach|sand|wetland|heath|tree_row)$"](${bb});
+  node["natural"="tree"](${bb});
   way["waterway"~"^(river|riverbank|canal|stream)$"](${bb});
   way["railway"~"^(rail|light_rail|narrow_gauge)$"](${bb});
   relation["type"="multipolygon"]["natural"~"^(water|wood|scrub)$"](${bb});
-  relation["type"="multipolygon"]["landuse"~"^(forest|grass|meadow|farmland|cemetery)$"](${bb});
-  relation["type"="multipolygon"]["leisure"~"^(park|garden)$"](${bb});
+  relation["type"="multipolygon"]["landuse"~"^(forest|grass|meadow|farmland|cemetery|orchard|allotments|recreation_ground|village_green)$"](${bb});
+  relation["type"="multipolygon"]["leisure"~"^(park|garden|playground|nature_reserve)$"](${bb});
+  relation["type"="multipolygon"]["natural"~"^(grassland|heath|wetland)$"](${bb});
   relation["type"="multipolygon"]["waterway"="riverbank"](${bb});
   node["name"]["amenity"~"^(townhall|hospital|police|fire_station|marketplace|place_of_worship|library|theatre|cinema|university|college|bus_station)$"](${bb});
   node["name"]["railway"="station"](${bb});
@@ -62,13 +64,26 @@ const ROAD_RANK = { footway: 0, path: 0, cycleway: 0, steps: 0, track: 0, bridle
   secondary_link: 3, primary_link: 3, trunk_link: 3, motorway_link: 3, tertiary: 4, secondary: 5,
   primary: 6, trunk: 7, motorway: 8 };
 
+// 0 = hoja ancha, 1 = pino, 2 = palmera, 4 = frutal
+function treeType(t) {
+  const sp = ((t.species || '') + ' ' + (t.genus || '') + ' ' + (t['species:es'] || '') + ' ' + (t['species:ca'] || '') + ' ' + (t.taxon || '')).toLowerCase();
+  if (/palm|phoenix|washingtonia|trachycarpus|chamaerops|syagrus|butia|palmera|palmer/.test(sp)) return 2;
+  if (/pinus|pino|pi |pi$|cupress|cedrus|abies|picea|conifer|xiprer|ciprés/.test(sp) || t.leaf_type === 'needleleaved') return 1;
+  return 0;
+}
+
 function areaKind(t) {
   if (t.natural === 'water' || t.waterway === 'riverbank' || t.landuse === 'reservoir') return 'water';
   if (t.natural === 'beach' || t.natural === 'sand') return 'sand';
   if (t.leisure === 'pitch' || t.leisure === 'stadium' || t.leisure === 'track') return 'pitch';
   if (t.landuse === 'cemetery') return 'cemetery';
-  if (t.landuse === 'farmland' || t.landuse === 'orchard' || t.landuse === 'allotments' || t.landuse === 'vineyard') return 'farm';
-  if (t.natural === 'wood' || t.landuse === 'forest' || t.natural === 'scrub') return 'wood';
+  if (t.leisure === 'playground') return 'playground';
+  if (t.landuse === 'orchard' || t.landuse === 'vineyard' || t.landuse === 'plant_nursery') return 'orchard';
+  if (t.landuse === 'farmland' || t.landuse === 'allotments') return 'farm';
+  if (t.natural === 'wood' || t.landuse === 'forest') return 'wood';
+  if (t.natural === 'scrub' || t.natural === 'heath') return 'scrub';
+  if (t.leisure === 'park' || t.leisure === 'garden' || t.leisure === 'nature_reserve' || t.leisure === 'dog_park') return 'park';
+  if (t.natural === 'wetland') return 'wetland';
   if (t.leisure || t.landuse || t.natural) return 'green';
   return null;
 }
@@ -143,12 +158,13 @@ function assembleRings(members) {
 
 // Convierte la respuesta de Overpass en el formato interno del juego
 SB.processOSM = function (osm) {
-  const map = { roads: [], buildings: [], areas: [], waterLines: [], rails: [], pois: [], places: [], bh: [], bk: [], shops: [], source: 'osm' };
+  const map = { roads: [], buildings: [], areas: [], waterLines: [], rails: [], pois: [], places: [], bh: [], bk: [], shops: [], trees: [], source: 'osm' };
   const parts = [];
   const centroid = (pts) => { let cx = 0, cy = 0; const n = pts.length / 2; for (let i = 0; i < pts.length; i += 2) { cx += pts[i]; cy += pts[i + 1]; } return [cx / n, cy / n]; };
   for (const el of osm.elements || []) {
     const t = el.tags || {};
     if (el.type === 'node') {
+      if (t.natural === 'tree') { map.trees.push(px(el.lon), py(el.lat), treeType(t)); continue; }
       if (!t.name) continue;
       if (t.place) { map.places.push({ x: px(el.lon), y: py(el.lat), name: t.name, big: t.place === 'town' }); continue; }
       if (t.shop || SHOP_AMENITIES.has(t.amenity)) { map.shops.push({ x: px(el.lon), y: py(el.lat), name: t.name, kind: t.shop ? shopKind(t.shop) : t.amenity }); continue; }
@@ -207,6 +223,16 @@ SB.processOSM = function (osm) {
       continue;
     }
     if (t.railway) { if (t.tunnel !== 'yes') map.rails.push(pts); continue; }
+    if (t.natural === 'tree_row') {
+      // hilera de árboles: uno cada ~7 m
+      const ty = treeType(t);
+      for (let i = 0; i + 3 < pts.length; i += 2) {
+        const L = Math.hypot(pts[i + 2] - pts[i], pts[i + 3] - pts[i + 1]), n = Math.max(1, Math.round(L / 7));
+        for (let k = 0; k < n; k++) map.trees.push(pts[i] + (pts[i + 2] - pts[i]) * k / n, pts[i + 1] + (pts[i + 3] - pts[i + 1]) * k / n, ty);
+      }
+      map.trees.push(pts[pts.length - 2], pts[pts.length - 1], ty);
+      continue;
+    }
     if (t.waterway && t.waterway !== 'riverbank' && !closed) {
       map.waterLines.push({ pts, w: t.waterway === 'river' ? 35 : t.waterway === 'canal' ? 8 : 3 });
       continue;
@@ -214,7 +240,7 @@ SB.processOSM = function (osm) {
     const kind = areaKind(t);
     if (kind && closed) {
       map.areas.push({ kind, rings: [pts] });
-      if (t.name && (t.leisure === 'park' || t.leisure === 'garden' || t.leisure === 'stadium' || t.leisure === 'sports_centre' || t.landuse === 'cemetery')) {
+      if (t.name && (t.leisure === 'park' || t.leisure === 'garden' || t.leisure === 'playground' || t.leisure === 'stadium' || t.leisure === 'sports_centre' || t.landuse === 'cemetery')) {
         const [cx, cy] = centroid(pts);
         map.pois.push({ x: cx, y: cy, name: t.name, kind: t.leisure === 'stadium' || t.leisure === 'sports_centre' ? 'stadium' : t.landuse === 'cemetery' ? 'cemetery' : 'park' });
       }

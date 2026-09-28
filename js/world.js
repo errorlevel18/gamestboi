@@ -10,12 +10,14 @@ const CG = 32;           // celda de colisión (m)
 const COLORS = {
   ground: '#b3ab9a', water: '#3d78b0', green: '#7fa65a', wood: '#5f8a45', farm: '#a9b16a',
   pitch: '#5a9a4e', sand: '#e0d3a2', cemetery: '#8d9d78', plaza: '#cdc5b3',
+  park: '#86b45f', playground: '#d9c38f', orchard: '#9fb562', scrub: '#7d9a55', wetland: '#7fa38a',
   sidewalk: '#d5cebf', asphalt: '#46484d', asphaltMajor: '#3e4045', ped: '#cdbfa3', path: '#c2ae8a',
   rail: '#6b5b4b',
 };
 const ROOFS = ['#9c8f84', '#a39486', '#8e8580', '#b09a88', '#998b7a', '#a8a39b', '#b8a48f', '#8f7f72', '#a0806e', '#b3aea4'];
 
 function key(a, b) { return a * 100003 + b; }
+const TAU2 = Math.PI * 2;
 
 class World {
   constructor(map) {
@@ -27,13 +29,14 @@ class World {
     this.bGrid = new Map();
     this.segGrid = new Map();
     this.buildIndex();
+    this.buildTrees();
     this.buildGraph();
   }
 
   tileBucket(tx, ty) {
     const k = key(tx, ty);
     let b = this.tileFeatures.get(k);
-    if (!b) { b = { roads: [], buildings: [], areas: [], waterLines: [], rails: [] }; this.tileFeatures.set(k, b); }
+    if (!b) { b = { roads: [], buildings: [], areas: [], waterLines: [], rails: [], trees: [] }; this.tileFeatures.set(k, b); }
     return b;
   }
   insertTiles(bb, margin, list, item) {
@@ -85,6 +88,71 @@ class World {
           l.push(b);
         }
     });
+  }
+
+  // ---------- Árboles ----------
+  // Árboles reales de OSM (natural=tree, tree_row) + relleno de parques, bosques y césped
+  // donde OSM no tiene árboles sueltos. Tipos: 0 hoja ancha, 1 pino, 2 palmera, 3 arbusto, 4 frutal, 5 ciprés
+  buildTrees() {
+    const m = this.map, X = [], Yy = [], T = [], S = [];
+    let seed = 12345;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    const add = (x, y, t, s) => { X.push(x); Yy.push(y); T.push(t); S.push(s); };
+    const real = m.trees || [];
+    const realGrid = new Map();
+    for (let i = 0; i < real.length; i += 3) {
+      add(real[i], real[i + 1], real[i + 2], 0.8 + rnd() * 0.5);
+      const k = key(Math.floor(real[i] / CG), Math.floor(real[i + 1] / CG));
+      let l = realGrid.get(k); if (!l) realGrid.set(k, l = []); l.push(i);
+    }
+    const mobile = typeof SB.isMobile === 'function' && SB.isMobile();
+    const cap = mobile ? 9000 : 30000;
+    let filled = 0;
+    const inArea = (a, x, y) => { let c = false; for (const r of a.rings) if (pointInPoly(x, y, r)) c = !c; return c; };
+    const RULES = {
+      park: [[1 / 230, [0, 0, 0, 1, 1, 2]], [1 / 700, [3]]],
+      wood: [[1 / 75, [1, 1, 1, 0, 0]], [1 / 300, [3]]],
+      scrub: [[1 / 45, [3]], [1 / 500, [1]]],
+      green: [[1 / 900, [0]], [1 / 450, [3]]],
+      cemetery: [[1 / 160, [5]]],
+      wetland: [[1 / 300, [3]]],
+    };
+    for (const a of m.areas) {
+      const bb = a.bb, area = (bb[2] - bb[0]) * (bb[3] - bb[1]);
+      if (area < 150 || area > 4e6) continue;
+      if (a.kind === 'orchard') {
+        for (let x = bb[0] + 2.5; x < bb[2] && filled < cap; x += 5.5) for (let y = bb[1] + 2.5; y < bb[3] && filled < cap; y += 5.5)
+          if (inArea(a, x, y) && !this.isInsideBuilding(x, y)) { add(x + rnd() - 0.5, y + rnd() - 0.5, 4, 0.8 + rnd() * 0.3); filled++; }
+        continue;
+      }
+      const rules = RULES[a.kind];
+      if (!rules) continue;
+      // si en el parque ya hay árboles reales de OSM, rellenamos mucho menos
+      let realN = 0;
+      for (let cx = Math.floor(bb[0] / CG); cx <= Math.floor(bb[2] / CG); cx++)
+        for (let cy = Math.floor(bb[1] / CG); cy <= Math.floor(bb[3] / CG); cy++)
+          for (const i of realGrid.get(key(cx, cy)) || []) if (inArea(a, real[i], real[i + 1])) realN++;
+      const factor = realN > area / 800 ? 0.15 : 1;
+      for (const [dens, types] of rules) {
+        const n = Math.min(3000, Math.round(area * dens * factor));
+        for (let k = 0; k < n && filled < cap; k++) {
+          const x = bb[0] + rnd() * (bb[2] - bb[0]), y = bb[1] + rnd() * (bb[3] - bb[1]);
+          if (!inArea(a, x, y) || this.isInsideBuilding(x, y) || this.roadDist(x, y, true) < 1.3) continue;
+          add(x, y, types[Math.floor(rnd() * types.length)], 0.75 + rnd() * 0.55);
+          filled++;
+        }
+      }
+    }
+    const n = X.length;
+    this.trees = { n, x: new Float32Array(X), y: new Float32Array(Yy), t: new Uint8Array(T), s: new Float32Array(S), real: real.length / 3 };
+    this.treeGrid = new Map();
+    for (let i = 0; i < n; i++) {
+      const x = X[i], y = Yy[i];
+      this.insertTiles([x, y, x, y], 3.5, 'trees', i);
+      if (T[i] === 3) continue; // los arbustos no chocan
+      const k = key(Math.floor(x / CG), Math.floor(y / CG));
+      let l = this.treeGrid.get(k); if (!l) this.treeGrid.set(k, l = []); l.push(i);
+    }
   }
 
   // ---------- Grafo de calles ----------
@@ -214,6 +282,16 @@ class World {
           res.hit = true; res.nx = nx; res.ny = ny; res.depth = Math.max(res.depth, depth);
           moved = true;
         }
+        const tl = this.treeGrid && this.treeGrid.get(key(i, j)); if (!tl) continue;
+        const T = this.trees;
+        for (const ti of tl) {
+          const tr = 0.3 * T.s[ti] + 0.05, dx = res.x - T.x[ti], dy = res.y - T.y[ti], d = Math.hypot(dx, dy);
+          if (d >= r + tr) continue;
+          const nx = dx / (d || 1), ny = dy / (d || 1), depth = r + tr - d;
+          res.x += nx * (depth + 0.01); res.y += ny * (depth + 0.01);
+          res.hit = true; res.nx = nx; res.ny = ny; res.depth = Math.max(res.depth, depth);
+          moved = true;
+        }
       }
       if (!moved) break;
     }
@@ -221,13 +299,13 @@ class World {
   }
 
   // Distancia (m) desde un punto al borde de la calle más cercana
-  roadDist(x, y) {
+  roadDist(x, y, all) {
     const cx = Math.floor(x / CG), cy = Math.floor(y / CG);
     let best = Infinity;
     for (let i = cx - 1; i <= cx + 1; i++) for (let j = cy - 1; j <= cy + 1; j++) {
       const l = this.segGrid.get(key(i, j)); if (!l) continue;
       for (let k = 0; k < l.length; k += 2) {
-        const r = this.map.roads[l[k]]; if (!r.drive && r.type !== 'pedestrian') continue;
+        const r = this.map.roads[l[k]]; if (!all && !r.drive && r.type !== 'pedestrian') continue;
         const p = r.pts, s = l[k + 1];
         const d = Math.sqrt(segDist2(x, y, p[s], p[s + 1], p[s + 2], p[s + 3])) - r.w / 2;
         if (d < best) best = d;
@@ -284,14 +362,14 @@ class World {
     if (!f) return c;
     const pathOf = (p) => { g.beginPath(); g.moveTo(p[0], p[1]); for (let i = 2; i < p.length; i += 2) g.lineTo(p[i], p[i + 1]); };
 
-    const order = ['farm', 'green', 'wood', 'cemetery', 'pitch', 'sand', 'plaza', 'water'];
+    const order = ['farm', 'orchard', 'green', 'scrub', 'wood', 'park', 'wetland', 'cemetery', 'pitch', 'playground', 'sand', 'plaza', 'water'];
     const areas = f.areas.slice().sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
     for (const a of areas) {
       g.beginPath();
       for (const ring of a.rings) { g.moveTo(ring[0], ring[1]); for (let i = 2; i < ring.length; i += 2) g.lineTo(ring[i], ring[i + 1]); g.closePath(); }
       g.fillStyle = COLORS[a.kind] || COLORS.green; g.fill('evenodd');
       if (a.kind === 'pitch') { g.strokeStyle = 'rgba(255,255,255,.5)'; g.lineWidth = 0.4; g.stroke(); }
-      if (a.kind === 'farm') { g.save(); g.clip('evenodd'); g.strokeStyle = 'rgba(80,100,40,.25)'; g.lineWidth = 0.6; for (let i = -TILE; i < TILE * 2; i += 3) { g.beginPath(); g.moveTo(tx * TILE + i, ty * TILE); g.lineTo(tx * TILE + i + 40, ty * TILE + TILE); g.stroke(); } g.restore(); }
+      if (a.kind === 'farm' || a.kind === 'orchard') { g.save(); g.clip('evenodd'); g.strokeStyle = 'rgba(80,100,40,.25)'; g.lineWidth = 0.6; for (let i = -TILE; i < TILE * 2; i += 3) { g.beginPath(); g.moveTo(tx * TILE + i, ty * TILE); g.lineTo(tx * TILE + i + 40, ty * TILE + TILE); g.stroke(); } g.restore(); }
     }
     for (const w of f.waterLines) { pathOf(w.pts); g.strokeStyle = COLORS.water; g.lineWidth = w.w; g.stroke(); }
 
@@ -339,6 +417,26 @@ class World {
       g.strokeStyle = 'rgba(40,30,25,.45)'; g.lineWidth = 0.35; g.stroke();
       g.strokeStyle = 'rgba(255,255,255,.12)'; g.lineWidth = 1.2;
       g.save(); g.clip(); g.stroke(); g.restore();
+    }
+    // árboles vistos desde arriba
+    const T = this.trees;
+    if (T && f.trees.length) {
+      const R = [2.3, 2.7, 1.9, 1.0, 1.4, 0.9];
+      const CC = [['#4f7d3a', '#5b8c3e', '#446e33', '#628f3f'], ['#3b6536', '#44703c'], ['#5d8a3a'], ['#5e8a45', '#6b9444'], ['#6f9a45'], ['#2f5a2f']];
+      g.fillStyle = 'rgba(0,0,0,.25)';
+      for (const i of f.trees) { g.beginPath(); g.arc(T.x[i] + 0.8, T.y[i] + 1.1, R[T.t[i]] * T.s[i], 0, TAU2); g.fill(); }
+      for (const i of f.trees) {
+        const t = T.t[i], r = R[t] * T.s[i], x = T.x[i], y = T.y[i], cols = CC[t];
+        g.fillStyle = cols[i % cols.length];
+        if (t === 2) { // palmera: estrella de hojas
+          g.beginPath();
+          for (let k = 0; k < 14; k++) { const a = k / 14 * TAU2 + i, rr = k % 2 ? r * 0.35 : r; g.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); }
+          g.fill();
+        } else {
+          g.beginPath(); g.arc(x, y, r, 0, TAU2); g.fill();
+          g.fillStyle = 'rgba(255,255,255,.12)'; g.beginPath(); g.arc(x - r * 0.3, y - r * 0.3, r * 0.5, 0, TAU2); g.fill();
+        }
+      }
     }
     return c;
   }
@@ -398,7 +496,8 @@ class World {
     for (const a of this.map.areas) {
       g.beginPath();
       for (const ring of a.rings) { g.moveTo(ring[0], ring[1]); for (let i = 2; i < ring.length; i += 2) g.lineTo(ring[i], ring[i + 1]); g.closePath(); }
-      g.fillStyle = a.kind === 'water' ? '#2f6aa0' : a.kind === 'plaza' ? '#6d6a60' : a.kind === 'sand' ? '#9e9670' : '#3e6a36';
+      g.fillStyle = a.kind === 'water' ? '#2f6aa0' : a.kind === 'plaza' ? '#6d6a60' : a.kind === 'sand' || a.kind === 'playground' ? '#9e9670'
+        : a.kind === 'farm' || a.kind === 'orchard' ? '#56672f' : a.kind === 'park' ? '#44803a' : '#3e6a36';
       g.fill('evenodd');
     }
     for (const w of this.map.waterLines) { g.beginPath(); g.moveTo(w.pts[0], w.pts[1]); for (let i = 2; i < w.pts.length; i += 2) g.lineTo(w.pts[i], w.pts[i + 1]); g.strokeStyle = '#2f6aa0'; g.lineWidth = w.w; g.stroke(); }

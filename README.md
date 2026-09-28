@@ -39,6 +39,10 @@ En el móvil salen un joystick y unos botones táctiles.
 - **Para orientarte en 3D:** placas con el nombre de la calle en los cruces, letreros de las tiendas, bares y farmacias
   que hay en OpenStreetMap, nombres flotantes sobre los sitios conocidos (Ajuntament, parques, iglesias, colegios…)
   y un minimapa que gira con la cámara.
+- **Árboles y zonas verdes reales:** cada árbol mapeado en OSM (`natural=tree`, hileras `tree_row`) aparece en su
+  sitio, como pino, palmera o árbol de hoja según la especie. Los parques, pinares, zonas de matorral, césped,
+  huertos y cementerios se rellenan con la vegetación que les toca, sin tapar los caminos, y los parques infantiles
+  tienen su color. Los troncos tienen colisión.
 - **Fachadas variadas:** ladrillo visto, balcones, persianas, bajos con tiendas o persianas metálicas con grafitis,
   naves industriales, iglesias de piedra y colegios, según el tipo de edificio en OSM. La altura sale de las plantas
   (`building:levels`) del edificio o de sus partes del Catastro.

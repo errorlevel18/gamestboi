@@ -89,6 +89,7 @@ class Renderer3D {
       steps: col('#b09a7c'), water: col('#3d78b0'), green: col('#7fa65a'), wood: col('#5f8a45'), farm: col('#a9b16a'),
       pitch: col('#5a9a4e'), sand: col('#e0d3a2'), cemetery: col('#8d9d78'), plaza: col('#cdc5b3'), rail: col('#6b5b4b'),
       bridge: col('#8a8578'), line: col('#e9e4cf'),
+      park: col('#86b45f'), playground: col('#d9c38f'), orchard: col('#9fb562'), scrub: col('#7d9a55'), wetland: col('#7fa38a'),
     };
     // suelo
     const b = this.w.bounds;
@@ -382,31 +383,68 @@ class Renderer3D {
     }
   }
 
-  // Árboles en parques y bosques (instanciados)
+  // Árboles (reales de OSM + relleno de parques), instanciados por tipo
   trees() {
-    const spots = [];
-    for (const a of this.w.map.areas) {
-      if (a.kind !== 'green' && a.kind !== 'wood') continue;
-      const ring = a.rings[0], bb = a.bb;
-      const area = (bb[2] - bb[0]) * (bb[3] - bb[1]);
-      const n = Math.min(400, Math.floor(area / (a.kind === 'wood' ? 90 : 220)));
-      for (let k = 0; k < n && spots.length < (this.mobile ? 1200 : 4000); k++) {
-        const x = bb[0] + Math.random() * (bb[2] - bb[0]), z = bb[1] + Math.random() * (bb[3] - bb[1]);
-        let inside = false;
-        for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2)
-          if ((ring[i + 1] > z) !== (ring[j + 1] > z) && x < (ring[j] - ring[i]) * (z - ring[i + 1]) / (ring[j + 1] - ring[i + 1]) + ring[i]) inside = !inside;
-        if (inside && !this.w.isInsideBuilding(x, z)) spots.push([x, z, 0.8 + Math.random() * 0.6]);
+    const T = this.w.trees;
+    if (!T || !T.n) return;
+    const trunkMat = new THREE.MeshLambertMaterial({ color: '#6b4f32' });
+    const crownMat = new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true });
+    const palmMat = new THREE.MeshLambertMaterial({ color: '#ffffff', side: THREE.DoubleSide });
+    // hojas de palmera: 8 hojas que salen del centro y caen hacia fuera
+    const palmLeaves = () => {
+      const pos = [];
+      for (let k = 0; k < 8; k++) {
+        const a = k / 8 * Math.PI * 2 + (k % 2) * 0.2, c = Math.cos(a), sn = Math.sin(a), px = -sn * 0.45, pz = c * 0.45;
+        const mx = c * 1.7, my = 0.35, mz = sn * 1.7, tx = c * 3.2, ty = -1.3 + (k % 3) * 0.3, tz = sn * 3.2;
+        pos.push(0, 0, 0, mx + px, my, mz + pz, mx - px, my, mz - pz);
+        pos.push(mx + px, my, mz + pz, tx, ty, tz, mx - px, my, mz - pz);
       }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.computeVertexNormals();
+      return g;
+    };
+    // [tronco: radio arriba, radio abajo, alto], [copa: geometría, altura del centro, escala x/y/z], colores
+    const TYPES = [
+      { trunk: [0.16, 0.24, 3], crown: new THREE.IcosahedronGeometry(2.1, 0), cy: 4.4, sc: [1, 0.9, 1], cols: ['#4f7d3a', '#5b8c3e', '#446e33', '#628f3f', '#557a35'] },
+      { trunk: [0.14, 0.22, 6], crown: new THREE.IcosahedronGeometry(2.6, 0), cy: 6.8, sc: [1.15, 0.42, 1.15], cols: ['#3b6536', '#44703c', '#355c31'] },
+      { trunk: [0.13, 0.2, 7.5], crown: palmLeaves(), cy: 7.5, sc: [1, 1, 1], cols: ['#5d8a3a', '#6a9440'], mat: palmMat },
+      { trunk: null, crown: new THREE.IcosahedronGeometry(1, 0), cy: 0.7, sc: [1, 0.75, 1], cols: ['#5e8a45', '#6b9444', '#56803f'] },
+      { trunk: [0.1, 0.15, 1.4], crown: new THREE.IcosahedronGeometry(1.3, 0), cy: 2.1, sc: [1, 0.85, 1], cols: ['#6f9a45', '#7da64c'] },
+      { trunk: [0.1, 0.14, 1], crown: new THREE.ConeGeometry(0.8, 7, 7), cy: 4.2, sc: [1, 1, 1], cols: ['#2f5a2f', '#355f33'] },
+    ];
+    // agrupamos por tipo y por trozo de mapa para que la cámara descarte los que no ve
+    const groups = new Map();
+    for (let i = 0; i < T.n; i++) {
+      const k = T.t[i] + ',' + Math.floor(T.x[i] / CH) + ',' + Math.floor(T.y[i] / CH);
+      let l = groups.get(k); if (!l) groups.set(k, l = []); l.push(i);
     }
-    if (!spots.length) return;
-    const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.26, 2.4, 6), new THREE.MeshLambertMaterial({ color: '#6b4f32' }), spots.length);
-    const crown = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(2, 0), new THREE.MeshLambertMaterial({ color: '#4f7d3a', flatShading: true }), spots.length);
-    const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), S = new THREE.Vector3(), P = new THREE.Vector3();
-    spots.forEach(([x, z, s], i) => {
-      S.set(s, s, s); P.set(x, 1.2 * s, z); M.compose(P, Q, S); trunk.setMatrixAt(i, M);
-      P.set(x, 3.4 * s, z); S.set(s * 1.1, s, s * 1.1); M.compose(P, Q, S); crown.setMatrixAt(i, M);
-    });
-    this.scene.add(trunk, crown);
+    const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), S = new THREE.Vector3(), P = new THREE.Vector3(), E = new THREE.Euler(), C = new THREE.Color();
+    const trunkGeo = TYPES.map(ty => ty.trunk && new THREE.CylinderGeometry(ty.trunk[0], ty.trunk[1], ty.trunk[2], 5));
+    // geometría que comparte los datos pero con una esfera envolvente del tamaño del trozo
+    const chunkGeo = (base) => {
+      const g = new THREE.BufferGeometry();
+      for (const n in base.attributes) g.setAttribute(n, base.attributes[n]);
+      if (base.index) g.setIndex(base.index);
+      g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 5, 0), CH * 0.75 + 10);
+      return g;
+    };
+    for (const [k, list] of groups) {
+      const [tt, gx, gz] = k.split(',').map(Number), ty = TYPES[tt];
+      const ox = (gx + 0.5) * CH, oz = (gz + 0.5) * CH;
+      const crown = new THREE.InstancedMesh(chunkGeo(ty.crown), ty.mat || crownMat, list.length);
+      const trunk = ty.trunk ? new THREE.InstancedMesh(chunkGeo(trunkGeo[tt]), trunkMat, list.length) : null;
+      crown.position.set(ox, 0, oz); if (trunk) trunk.position.set(ox, 0, oz);
+      list.forEach((i, j) => {
+        const x = T.x[i] - ox, z = T.y[i] - oz, sc = T.s[i];
+        if (trunk) { Q.identity(); S.set(sc, sc, sc); P.set(x, ty.trunk[2] / 2 * sc, z); M.compose(P, Q, S); trunk.setMatrixAt(j, M); }
+        E.set(0, (i * 1.7) % 6.28, 0); Q.setFromEuler(E);
+        S.set(ty.sc[0] * sc, ty.sc[1] * sc, ty.sc[2] * sc); P.set(x, ty.cy * sc, z); M.compose(P, Q, S); crown.setMatrixAt(j, M);
+        C.set(ty.cols[i % ty.cols.length]); crown.setColorAt(j, C);
+      });
+      crown.instanceMatrix.needsUpdate = true; if (crown.instanceColor) crown.instanceColor.needsUpdate = true;
+      this.scene.add(crown); if (trunk) this.scene.add(trunk);
+    }
   }
 
   // ---------- objetos dinámicos ----------
