@@ -22,8 +22,22 @@ function ready(m, note) {
 async function load(force) {
   playBtn.disabled = true;
   $('retry').style.display = 'none';
+  // 1) mapa publicado con el juego (data/): rápido y sin depender de Overpass
+  setStatus('Buscando el mapa…');
+  const manifest = await SB.fetchManifest();
+  const cached = force ? null : await SB.loadCachedMap();
+  if (manifest) {
+    const fecha = new Date(manifest.date).toLocaleDateString('es-ES');
+    if (cached && cached.dataDate === manifest.date) { ready(cached, `Mapa de Sant Boi del ${fecha} (guardado)`); return; }
+    try {
+      const m = await SB.loadPublishedMap(manifest, (t) => setStatus(t));
+      SB.saveCachedMap(m);
+      ready(m, `Mapa de Sant Boi del ${fecha}`);
+      return;
+    } catch (e) { console.warn('Mapa publicado', e); }
+  }
+  // 2) sin mapa publicado (p. ej. abriendo index.html en local): caché o descarga desde Overpass
   if (!force) {
-    const cached = await SB.loadCachedMap();
     if (cached) { ready(cached, 'Mapa de Sant Boi (guardado)'); return; }
   } else await SB.clearCachedMap(true);
   try {

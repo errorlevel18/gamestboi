@@ -48,6 +48,9 @@ const PARTS = [
   { id: 'bus', label: 'líneas de bus', relOnly: true, q: (bb) => `relation["route"="bus"](${bb});` },
 ];
 
+SB.OSM_PARTS = PARTS;
+SB.partQuery = (part) => partQuery(part, SB.BBOX);
+
 function partQuery(part, b) {
   const bb = `${b.s},${b.w},${b.n},${b.e}`;
   // las rutas de bus se recortan al área para no traer todo su recorrido
@@ -422,6 +425,34 @@ SB.downloadMap = async function (onStatus) {
   if (elements.length < 50) throw new Error('respuesta vacía');
   const map = SB.processOSM({ elements });
   map.skipped = skipped;
+  return map;
+};
+
+// Mapa publicado junto al juego (lo genera GitHub Actions con tools/fetch-osm.mjs):
+// data/manifest.json + data/<parte>.json. Mucho más rápido y fiable que Overpass.
+SB.fetchManifest = async function () {
+  try {
+    const r = await fetch('data/manifest.json', { cache: 'no-cache' });
+    if (!r.ok) return null;
+    const m = await r.json();
+    return m && m.parts ? m : null;
+  } catch (e) { return null; }
+};
+SB.loadPublishedMap = async function (manifest, onStatus) {
+  const elements = [], seen = new Set();
+  for (let i = 0; i < PARTS.length; i++) {
+    const part = PARTS[i], info = manifest.parts[part.id];
+    if (!info) { if (part.essential) throw new Error('falta ' + part.label); continue; }
+    onStatus(`Cargando ${part.label} (${i + 1}/${PARTS.length})…`, false);
+    const r = await fetch(`data/${part.id}.json?d=${encodeURIComponent(manifest.date)}`);
+    if (!r.ok) { if (part.essential) throw new Error('HTTP ' + r.status); continue; }
+    const json = await r.json();
+    for (const el of json.elements || []) { const k = el.type[0] + el.id; if (!seen.has(k)) { seen.add(k); elements.push(el); } }
+  }
+  onStatus('Procesando mapa…', false);
+  await new Promise(r => setTimeout(r, 30));
+  const map = SB.processOSM({ elements });
+  map.dataDate = manifest.date;
   return map;
 };
 
