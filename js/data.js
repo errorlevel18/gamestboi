@@ -49,7 +49,7 @@ const PARTS = [
 ];
 
 SB.OSM_PARTS = PARTS;
-SB.partQuery = (part) => partQuery(part, SB.BBOX);
+SB.partQuery = (part, bbox) => partQuery(part, bbox || SB.BBOX);
 
 function partQuery(part, b) {
   const bb = `${b.s},${b.w},${b.n},${b.e}`;

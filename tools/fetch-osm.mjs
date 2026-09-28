@@ -41,29 +41,57 @@ function compact(json) {
   };
 }
 
-async function fetchPart(part) {
-  // en Actions podemos esperar más: dejamos al servidor hasta 3 minutos
-  const body = 'data=' + encodeURIComponent(SB.partQuery(part).replace('[timeout:90]', '[timeout:180]'));
-  for (let round = 0; round < 3; round++) {
-    for (const url of MIRRORS) {
-      const t0 = Date.now();
-      try {
-        const ctl = new AbortController();
-        const timer = setTimeout(() => ctl.abort(), 240000);
-        const res = await fetch(url, { method: 'POST', body, signal: ctl.signal,
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'gamestboi-map-updater (github.com/errorlevel18/gamestboi)' } });
-        clearTimeout(timer);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const json = await res.json();
-        if (json.remark && /error|timed out|out of memory/i.test(json.remark)) throw new Error(json.remark);
-        console.log(`  ${part.id}: ${json.elements.length} elementos desde ${new URL(url).host} en ${((Date.now() - t0) / 1000).toFixed(0)} s`);
-        return json;
-      } catch (e) {
-        console.log(`  ${part.id}: fallo en ${new URL(url).host}: ${e.message}`);
-        await sleep(5000);
-      }
+// Una petición a Overpass probando los servidores en orden
+async function query(q, label, timeoutMs) {
+  const body = 'data=' + encodeURIComponent(q);
+  for (const url of MIRRORS) {
+    const t0 = Date.now();
+    try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), timeoutMs);
+      const res = await fetch(url, { method: 'POST', body, signal: ctl.signal,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'gamestboi-map-updater (github.com/errorlevel18/gamestboi)' } });
+      clearTimeout(timer);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const json = await res.json();
+      if (json.remark && /error|timed out|out of memory/i.test(json.remark)) throw new Error(json.remark);
+      console.log(`  ${label}: ${json.elements.length} elementos desde ${new URL(url).host} en ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+      return json;
+    } catch (e) {
+      console.log(`  ${label}: fallo en ${new URL(url).host} tras ${((Date.now() - t0) / 1000).toFixed(0)} s: ${e.message}`);
+      await sleep(3000);
     }
-    await sleep(30000);
+  }
+  return null;
+}
+
+// Si una parte es demasiado pesada, se parte el área en 4 cuadrantes (y cada uno en 4 si hace falta)
+async function fetchArea(part, bb, depth, label) {
+  const q = SB.partQuery(part, bb).replace('[timeout:90]', '[timeout:120]');
+  const json = await query(q, label, depth === 0 ? 150000 : 130000);
+  if (json) return json.elements;
+  if (depth >= 2) return null;
+  console.log(`  ${label}: demasiado grande, se divide en 4 trozos`);
+  const ms = (bb.s + bb.n) / 2, mw = (bb.w + bb.e) / 2, out = [];
+  const quads = [{ s: bb.s, w: bb.w, n: ms, e: mw }, { s: bb.s, w: mw, n: ms, e: bb.e }, { s: ms, w: bb.w, n: bb.n, e: mw }, { s: ms, w: mw, n: bb.n, e: bb.e }];
+  for (let i = 0; i < 4; i++) {
+    const el = await fetchArea(part, quads[i], depth + 1, `${label}.${i + 1}`);
+    if (!el) return null;
+    out.push(...el);
+    await sleep(2000);
+  }
+  return out;
+}
+
+async function fetchPart(part) {
+  for (let round = 0; round < 2; round++) {
+    const el = await fetchArea(part, SB.BBOX, 0, part.id);
+    if (el) {
+      const seen = new Set(), elements = [];
+      for (const e of el) { const k = e.type[0] + e.id; if (!seen.has(k)) { seen.add(k); elements.push(e); } }
+      return { elements };
+    }
+    await sleep(20000);
   }
   return null;
 }
