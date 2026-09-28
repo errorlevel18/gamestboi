@@ -446,6 +446,9 @@ class Game {
     if (thr > 0) vf += thr * m.acc * dt * (vf < 0 ? 2.2 : 1) * (1 - Math.max(0, vf) / maxF * 0.7);
     else if (thr < 0) { if (vf > 0.3) vf += thr * 18 * dt; else vf += thr * m.acc * 0.6 * dt; }
     else vf -= vf * 0.35 * dt + Math.sign(vf) * Math.min(Math.abs(vf), 0.8 * dt);
+    // cuestas: la gravedad frena al subir y acelera al bajar
+    const T = this.w.terrain;
+    if (T.ok) vf -= 9.8 * T.slope(c.x, c.y, fx, fy) * 0.85 * dt;
     vf = clamp(vf, -m.max * 0.3, maxF);
     if (inp.hb) vf -= vf * 1.2 * dt;
     const grip = inp.hb ? 1.6 : m.bike ? 14 : 9;

@@ -28,6 +28,7 @@ class World {
     this.buildings = [];
     this.bGrid = new Map();
     this.segGrid = new Map();
+    this.terrain = new SB.Terrain(map.source === 'fallback' ? null : SB.ELEVATION);
     this.buildIndex();
     this.buildTrees();
     this.buildGraph();
@@ -351,12 +352,13 @@ class World {
   }
 
   // ---------- Render ----------
-  renderTile(tx, ty) {
+  // groundOnly: sólo el suelo (para texturizar el terreno 3D), sin edificios ni árboles
+  renderTile(tx, ty, ts = TS, groundOnly = false) {
     const c = document.createElement('canvas');
-    c.width = c.height = TILE * TS;
+    c.width = c.height = Math.round(TILE * ts);
     const g = c.getContext('2d');
     g.fillStyle = COLORS.ground; g.fillRect(0, 0, c.width, c.height);
-    g.setTransform(TS, 0, 0, TS, -tx * TILE * TS, -ty * TILE * TS);
+    g.setTransform(ts, 0, 0, ts, -tx * TILE * ts, -ty * TILE * ts);
     g.lineCap = 'round'; g.lineJoin = 'round';
     const f = this.tileFeatures.get(key(tx, ty));
     if (!f) return c;
@@ -372,6 +374,8 @@ class World {
       if (a.kind === 'farm' || a.kind === 'orchard') { g.save(); g.clip('evenodd'); g.strokeStyle = 'rgba(80,100,40,.25)'; g.lineWidth = 0.6; for (let i = -TILE; i < TILE * 2; i += 3) { g.beginPath(); g.moveTo(tx * TILE + i, ty * TILE); g.lineTo(tx * TILE + i + 40, ty * TILE + TILE); g.stroke(); } g.restore(); }
     }
     for (const w of f.waterLines) { pathOf(w.pts); g.strokeStyle = COLORS.water; g.lineWidth = w.w; g.stroke(); }
+    // sombreado del relieve en la vista cenital (en 3D ya lo da la luz)
+    if (!groundOnly && this.terrain.ok) this.hillshade(g, tx, ty);
 
     // aceras
     for (const r of f.roads) {
@@ -405,6 +409,7 @@ class World {
       g.strokeStyle = '#3c3c3c'; g.lineWidth = 0.25;
       g.save(); g.lineWidth = 1.7; g.stroke(); g.lineWidth = 1.3; g.strokeStyle = '#7d705f'; g.stroke(); g.restore();
     }
+    if (groundOnly) { this.drawCrossings && this.drawCrossings(g, f); return c; }
     // edificios: sombra y tejado
     g.fillStyle = 'rgba(0,0,0,.28)';
     for (const b of f.buildings) {
@@ -439,6 +444,24 @@ class World {
       }
     }
     return c;
+  }
+
+  hillshade(g, tx, ty) {
+    const N = 17, st = TILE / (N - 1), T = this.terrain;
+    const hc = document.createElement('canvas'); hc.width = hc.height = N;
+    const hg = hc.getContext('2d'), img = hg.createImageData(N, N);
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const x = tx * TILE + i * st, y = ty * TILE + j * st;
+      const dx = T.at(x + 4, y) - T.at(x - 4, y), dy = T.at(x, y + 4) - T.at(x, y - 4);
+      const s = Math.max(-1, Math.min(1, (dx + dy) * 0.12));
+      const k = (j * N + i) * 4;
+      if (s > 0) { img.data[k] = img.data[k + 1] = img.data[k + 2] = 0; img.data[k + 3] = s * 110; }
+      else { img.data[k] = img.data[k + 1] = img.data[k + 2] = 255; img.data[k + 3] = -s * 70; }
+    }
+    hg.putImageData(img, 0, 0);
+    g.save(); g.imageSmoothingEnabled = true;
+    g.drawImage(hc, 0, 0, N, N, tx * TILE - st / 2, ty * TILE - st / 2, TILE + st, TILE + st);
+    g.restore();
   }
 
   getTile(tx, ty, budget) {
@@ -530,6 +553,7 @@ function segDist2(x, y, x1, y1, x2, y2) {
 }
 
 SB.World = World;
+SB.TILE = TILE;
 SB.segDist2 = segDist2;
 SB.pointInPoly = pointInPoly;
 })();
