@@ -1128,7 +1128,7 @@ class Game {
     for (const p of this.w.map.pois) {
       if (!vis(p)) continue;
       const [x, y] = S(p.x, p.y);
-      const icon = { townhall: '🏛', hospital: '🏥', police: '🚓', station: '🚉', place_of_worship: '⛪', marketplace: '🛒', library: '📚', school: '🏫', fire_station: '🚒', theatre: '🎭', cinema: '🎬', museum: '🏺' }[p.kind] || '📍';
+      const icon = { townhall: '🏛', hospital: '🏥', police: '🚓', station: '🚉', place_of_worship: '⛪', marketplace: '🛒', library: '📚', school: '🏫', fire_station: '🚒', theatre: '🎭', cinema: '🎬', museum: '🏺', park: '🌳', stadium: '🏟', cemetery: '✝', building: '🏢' }[p.kind] || '📍';
       g.fillStyle = 'rgba(0,0,0,.55)';
       const t = `${icon} ${p.name}`;
       const wd = g.measureText(t).width + 10 * this.dpr;
@@ -1190,6 +1190,9 @@ class Game {
     g.save();
     g.fillStyle = '#1d201c'; g.fillRect(0, 0, size, size);
     g.beginPath(); g.arc(size / 2, size / 2, size / 2 - 2, 0, TAU); g.clip();
+    // en 3D el minimapa gira para que "arriba" sea hacia donde mira la cámara
+    const rot = this.view3d && this.r3d && this.r3d.yaw != null ? -Math.PI / 2 - this.r3d.yaw : 0;
+    g.translate(size / 2, size / 2); g.rotate(rot); g.translate(-size / 2, -size / 2);
     const sx = (P.x - R - b.minx) * mm.S, sy = (P.y - R - b.miny) * mm.S;
     g.drawImage(mm.c, sx, sy, 2 * R * mm.S, 2 * R * mm.S, 0, 0, size, size);
     const M = (x, y) => [(x - P.x) * k + size / 2, (y - P.y) * k + size / 2];
@@ -1199,13 +1202,16 @@ class Game {
     const t = this.target(); if (t) dot(t.x, t.y, '#ffd21f', 6);
     g.restore();
     // jugador
-    g.save(); g.translate(size / 2, size / 2); g.rotate(this.player.car ? this.player.car.a : this.player.a);
+    g.save(); g.translate(size / 2, size / 2); g.rotate((this.player.car ? this.player.car.a : this.player.a) + rot);
     g.fillStyle = '#fff'; g.strokeStyle = '#000'; g.lineWidth = 1.5;
     g.beginPath(); g.moveTo(8, 0); g.lineTo(-5, -5); g.lineTo(-2, 0); g.lineTo(-5, 5); g.closePath(); g.fill(); g.stroke();
     g.restore();
     g.strokeStyle = this.stars ? (Math.floor(this.time * 4) % 2 ? '#ff3b3b' : '#3b7bff') : '#e8e2cf'; g.lineWidth = 3;
     g.beginPath(); g.arc(size / 2, size / 2, size / 2 - 2, 0, TAU); g.stroke();
-    g.fillStyle = '#fff'; g.font = 'bold 11px system-ui'; g.textAlign = 'center'; g.fillText('N', size / 2, 13);
+    const na = -Math.PI / 2 + rot, nr = size / 2 - 11;
+    g.fillStyle = '#e53935'; g.beginPath(); g.arc(size / 2 + Math.cos(na) * nr, size / 2 + Math.sin(na) * nr, 8, 0, TAU); g.fill();
+    g.fillStyle = '#fff'; g.font = 'bold 11px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('N', size / 2 + Math.cos(na) * nr, size / 2 + Math.sin(na) * nr + 1); g.textBaseline = 'alphabetic';
   }
 
   drawBigMap() {

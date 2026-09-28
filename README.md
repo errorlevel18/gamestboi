@@ -36,6 +36,12 @@ En el móvil salen un joystick y unos botones táctiles.
 ### Qué hay en el juego
 
 - **Calles reales:** el HUD muestra la calle y el barrio en el que estás (Marianao, Casablanca, Camps Blancs…).
+- **Para orientarte en 3D:** placas con el nombre de la calle en los cruces, letreros de las tiendas, bares y farmacias
+  que hay en OpenStreetMap, nombres flotantes sobre los sitios conocidos (Ajuntament, parques, iglesias, colegios…)
+  y un minimapa que gira con la cámara.
+- **Fachadas variadas:** ladrillo visto, balcones, persianas, bajos con tiendas o persianas metálicas con grafitis,
+  naves industriales, iglesias de piedra y colegios, según el tipo de edificio en OSM. La altura sale de las plantas
+  (`building:levels`) del edificio o de sus partes del Catastro.
 - **Tráfico** que circula por la derecha y respeta las calles de sentido único, además de **peatones** por las aceras y coches aparcados.
 - **Vehículos:** compactos, berlinas, furgonetas, taxis de Barcelona (negros y amarillos), deportivos y motos.
 - **Nivel de búsqueda** de 1 a 5 estrellas. La policía te persigue por las calles y, a partir de 3 estrellas, te dispara.
@@ -52,6 +58,7 @@ botón **Cargar JSON de Overpass** de la pantalla de inicio.
 ## Estructura
 
 - `js/data.js`: descarga y procesa los datos de OpenStreetMap y genera el mapa de reserva.
+- `js/facades.js`: texturas procedurales de fachadas y atlas de textos para placas y letreros.
 - `js/render3d.js`: vista 3D con Three.js (edificios extruidos, árboles, coches, peatones y cámara de persecución).
 - `js/vendor/three.min.js`: Three.js r149 (licencia MIT).
 - `js/world.js`: índices espaciales, grafo de calles, colisiones y render del mapa por teselas.

@@ -57,10 +57,15 @@ class Renderer3D {
     const sun = new THREE.DirectionalLight(0xfff0d8, 0.55); sun.position.set(-0.45, 1, -0.3); this.scene.add(sun);
     this.mats = {
       flat: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
-      wall: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, map: this.windowTexture() }),
       roof: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
     };
+    this.facades = SB.buildFacades(THREE);
+    for (const k in this.facades.upper) this.mats['u_' + k] = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, map: this.facades.upper[k].tex });
+    for (const k in this.facades.ground) this.mats['g_' + k] = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, map: this.facades.ground[k].tex });
+    this.bHeight = new Float32Array(world.buildings.length);
     this.buildStatic();
+    this.buildSigns();
+    this.buildLandmarks();
     this.buildDynamicPools();
     this.meshes = new Map();
     this.boxGeo = new THREE.BoxGeometry(1, 1, 1);
@@ -74,20 +79,6 @@ class Renderer3D {
     this.renderer.setSize(innerWidth, innerHeight, false);
     this.camera.aspect = innerWidth / innerHeight;
     this.camera.updateProjectionMatrix();
-  }
-
-  windowTexture() {
-    const c = document.createElement('canvas'); c.width = c.height = 64;
-    const g = c.getContext('2d');
-    g.fillStyle = '#fff'; g.fillRect(0, 0, 64, 64);
-    g.fillStyle = '#e9e9e9'; g.fillRect(0, 58, 64, 6);
-    g.fillStyle = '#3d4a57'; g.fillRect(18, 14, 28, 34);
-    g.fillStyle = '#5d7085'; g.fillRect(20, 16, 11, 30);
-    g.fillStyle = '#9a8a78'; g.fillRect(14, 48, 36, 4);
-    const t = new THREE.CanvasTexture(c);
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.anisotropy = 4;
-    return t;
   }
 
   // ---------- geometría estática ----------
@@ -136,7 +127,7 @@ class Renderer3D {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(bt.p.a.slice(0, bt.p.n), 3));
       g.setAttribute('color', new THREE.BufferAttribute(bt.c.a.slice(0, bt.c.n), 3, true));
-      if (bt.mat === 'wall') g.setAttribute('uv', new THREE.BufferAttribute(bt.uv.a.slice(0, bt.uv.n), 2));
+      if (bt.mat !== 'flat' && bt.mat !== 'roof') g.setAttribute('uv', new THREE.BufferAttribute(bt.uv.a.slice(0, bt.uv.n), 2));
       bt.p = bt.c = bt.uv = null;
       g.computeVertexNormals();
       g.computeBoundingSphere();
@@ -209,31 +200,185 @@ class Renderer3D {
   building(B, bd, h, i) {
     const p = bd.pts;
     if ((bd.bb[2] - bd.bb[0]) * (bd.bb[3] - bd.bb[1]) > 400000) return;
-    if (!h) h = 9 + Math.floor(hash(i) * 4) * 3.1; // entre 3 y 6 plantas si OSM no lo dice
-    const wallC = col(WALLS[Math.floor(hash(i + 7) * WALLS.length)]);
-    const roofC = col(bd.color);
+    const kind = (this.w.map.bk && this.w.map.bk[i]) || '';
+    const r1 = hash(i + 3), r2 = hash(i + 11), r3 = hash(i + 7);
+    if (!h) h = { house: 7, shed: 3.5, industrial: 9, church: 16, school: 10.5, commercial: 8, public: 12.5 }[kind] || 9 + Math.floor(r1 * 4) * 3.1;
+    this.bHeight[i] = h;
+    let upper, ground = null;
+    if (kind === 'church') upper = 'stone';
+    else if (kind === 'school') upper = 'school';
+    else if (kind === 'industrial') upper = 'industrial';
+    else if (kind === 'house') upper = 'house';
+    else if (kind === 'shed') upper = 'plaster';
+    else if (kind === 'commercial' || kind === 'public') upper = r1 < 0.6 ? 'modern' : 'brick';
+    else upper = ['classic', 'balcony', 'brick', 'brick', 'brickBalcony', 'blind', 'blind', 'plaster', 'modern', 'balcony'][Math.floor(r1 * 10)];
+    if ((kind === '' || kind === 'commercial') && h > 6)
+      ground = ['shopRed', 'shopGreen', 'shopBlue', 'shopOrange', 'shutter1', 'shutter2', 'shutter1', 'door', 'door', 'garage'][Math.floor(r2 * 10)];
+    const tintC = (style, set) => set[style].tint ? col(WALLS[Math.floor(r3 * WALLS.length)]) : new THREE.Color().setScalar(0.9 + r3 * 0.1);
+    const upC = tintC(upper, this.facades.upper);
     const cx = (bd.bb[0] + bd.bb[2]) / 2, cz = (bd.bb[1] + bd.bb[3]) / 2;
-    const wb = B.get(cx, cz, 'wall');
     const n = p.length / 2 - 1;
-    const floors = Math.max(1, Math.round(h / 3.1));
+    const gh = ground ? Math.min(3.8, h) : 0;
+    const floorH = kind === 'industrial' || kind === 'shed' ? h : kind === 'church' ? 5 : 3.1;
+    const floors = Math.max(1, Math.round((h - gh) / floorH));
+    const ub = B.get(cx, cz, 'u_' + upper), gb = ground ? B.get(cx, cz, 'g_' + ground) : null;
+    const gC = ground ? tintC(ground, this.facades.ground) : null;
     for (let k = 0; k < n; k++) {
       const x1 = p[k * 2], z1 = p[k * 2 + 1], x2 = p[k * 2 + 2], z2 = p[k * 2 + 3];
       const L = Math.hypot(x2 - x1, z2 - z1);
       if (L < 0.05) continue;
-      const u = Math.max(1, Math.round(L / 3.6));
-      pushTri(wb, x1, 0, z1, x2, 0, z2, x2, h, z2, wallC);
-      pushTri(wb, x1, 0, z1, x2, h, z2, x1, h, z1, wallC);
-      wb.uv.push2(0, 0); wb.uv.push2(u, 0); wb.uv.push2(u, floors);
-      wb.uv.push2(0, 0); wb.uv.push2(u, floors); wb.uv.push2(0, floors);
+      const u = Math.max(1, Math.round(L / (kind === 'industrial' ? 6 : 3.6)));
+      pushTri(ub, x1, gh, z1, x2, gh, z2, x2, h, z2, upC);
+      pushTri(ub, x1, gh, z1, x2, h, z2, x1, h, z1, upC);
+      ub.uv.push2(0, 0); ub.uv.push2(u, 0); ub.uv.push2(u, floors);
+      ub.uv.push2(0, 0); ub.uv.push2(u, floors); ub.uv.push2(0, floors);
+      if (gb) {
+        pushTri(gb, x1, 0, z1, x2, 0, z2, x2, gh, z2, gC);
+        pushTri(gb, x1, 0, z1, x2, gh, z2, x1, gh, z1, gC);
+        gb.uv.push2(0, 0); gb.uv.push2(u, 0); gb.uv.push2(u, 1);
+        gb.uv.push2(0, 0); gb.uv.push2(u, 1); gb.uv.push2(0, 1);
+      }
     }
     const pts = [];
     for (let k = 0; k < n; k++) pts.push(new THREE.Vector2(p[k * 2], p[k * 2 + 1]));
     let tris;
     try { tris = THREE.ShapeUtils.triangulateShape(pts, []); } catch (e) { return; }
+    const roofC = col(kind === 'church' ? '#9a5b43' : kind === 'industrial' ? '#8d9499' : bd.color);
     const rb = B.get(cx, cz, 'roof');
     for (const t of tris) {
       const a = pts[t[0]], b2 = pts[t[1]], d = pts[t[2]];
       pushTri(rb, a.x, h, a.y, b2.x, h, b2.y, d.x, h, d.y, roofC);
+    }
+  }
+
+  // ---------- letreros: placas de calle y tiendas reales de OSM ----------
+  buildSigns() {
+    const w = this.w, m = w.map, atlas = new SB.TextAtlas(), R = SB.SIGN_RATIO;
+    const bufs = [];
+    const buf = (i) => bufs[i] || (bufs[i] = { p: new Buf(Float32Array), uv: new Buf(Float32Array) });
+    // quad legible desde el lado (-uz, ux)
+    const quad = (t, cx, cy, cz, ux, uz, W, H) => {
+      const b = buf(t.atlas), hx = ux * W / 2, hz = uz * W / 2;
+      const x0 = cx - hx, z0 = cz - hz, x1 = cx + hx, z1 = cz + hz, y0 = cy - H / 2, y1 = cy + H / 2;
+      b.p.push3(x0, y0, z0); b.p.push3(x1, y0, z1); b.p.push3(x1, y1, z1);
+      b.p.push3(x0, y0, z0); b.p.push3(x1, y1, z1); b.p.push3(x0, y1, z0);
+      b.uv.push2(t.u0, t.v0); b.uv.push2(t.u1, t.v0); b.uv.push2(t.u1, t.v1);
+      b.uv.push2(t.u0, t.v0); b.uv.push2(t.u1, t.v1); b.uv.push2(t.u0, t.v1);
+    };
+    const poles = { p: new Buf(Float32Array), c: new Buf(Uint8Array) };
+    const poleC = col('#3a3d42');
+
+    // Placas en los cruces: una por calle, sin repetir la misma calle a menos de 45 m
+    const placed = new Map();
+    let plates = 0;
+    for (let n = 0; n < w.nx.length && plates < 3500; n++) {
+      const byName = new Map();
+      for (const e of w.pedAdj[n]) if (e.r.name && e.r.drive && !byName.has(e.r.name)) byName.set(e.r.name, e);
+      if (byName.size < 2) continue;
+      for (const [name, e] of byName) {
+        const x = w.nx[n], z = w.ny[n];
+        const list = placed.get(name) || [];
+        if (list.some(([a, b]) => (a - x) ** 2 + (b - z) ** 2 < 45 * 45)) continue;
+        let ux = w.nx[e.to] - x, uz = w.ny[e.to] - z; const L = Math.hypot(ux, uz) || 1; ux /= L; uz /= L;
+        let side = 1, off = e.r.w / 2 + 1.2;
+        let px = x - uz * off * side + ux * Math.min(6, L * 0.4), pz = z + ux * off * side + uz * Math.min(6, L * 0.4);
+        if (w.isInsideBuilding(px, pz)) { side = -1; px = x - uz * off * side + ux * Math.min(6, L * 0.4); pz = z + ux * off * side + uz * Math.min(6, L * 0.4); }
+        const t = atlas.add(name, 'street');
+        const W = 3.2, H = W / R;
+        quad(t, px, 2.9, pz, ux, uz, W, H);
+        quad(t, px, 2.9, pz, -ux, -uz, W, H);
+        // poste
+        const pw = 0.06;
+        pushTri(poles, px - uz * pw, 0, pz + ux * pw, px + uz * pw, 0, pz - ux * pw, px + uz * pw, 2.9 - H / 2, pz - ux * pw, poleC);
+        pushTri(poles, px - uz * pw, 0, pz + ux * pw, px + uz * pw, 2.9 - H / 2, pz - ux * pw, px - uz * pw, 2.9 - H / 2, pz + ux * pw, poleC);
+        list.push([x, z]); placed.set(name, list); plates++;
+      }
+    }
+
+    // Letreros de tiendas, bares, farmacias… en la fachada que da a la calle
+    const used = [];
+    for (const sh of m.shops || []) {
+      let best = null, bs = Infinity;
+      for (const b of w.buildingsNear(sh.x, sh.y, 25)) {
+        const p = b.pts;
+        for (let k = 0; k + 3 < p.length; k += 2) {
+          const x1 = p[k], z1 = p[k + 1], x2 = p[k + 2], z2 = p[k + 3];
+          const L = Math.hypot(x2 - x1, z2 - z1); if (L < 3) continue;
+          const d = Math.sqrt(SB.segDist2(sh.x, sh.y, x1, z1, x2, z2)); if (d > 25) continue;
+          const ux = (x2 - x1) / L, uz = (z2 - z1) / L;
+          let t = ((sh.x - x1) * ux + (sh.y - z1) * uz); t = Math.max(1.5, Math.min(L - 1.5, t));
+          const qx = x1 + ux * t, qz = z1 + uz * t;
+          let nx = -uz, nz = ux;
+          if (SB.pointInPoly(qx + nx * 0.4, qz + nz * 0.4, p, b.bb)) { nx = -nx; nz = -nz; }
+          const rd = w.roadDist(qx + nx * 3, qz + nz * 3);
+          const score = d + (rd > 8 ? 30 : rd);
+          if (score < bs) { bs = score; best = { qx, qz, nx, nz, L, b }; }
+        }
+      }
+      if (!best || bs > 40) continue;
+      if (used.some(([a, c]) => (a - best.qx) ** 2 + (c - best.qz) ** 2 < 36)) continue;
+      used.push([best.qx, best.qz]);
+      const W = Math.min(best.L * 0.95, 7), H = W / R;
+      const bh = this.bHeight[best.b.i] || 9;
+      const y = Math.min(bh - H / 2 - 0.2, 4.3);
+      const t = atlas.add(sh.name, sh.kind);
+      // legible desde fuera: u = (nz, -nx)
+      quad(t, best.qx + best.nx * 0.15, y, best.qz + best.nz * 0.15, best.nz, -best.nx, W, H);
+    }
+
+    bufs.forEach((b, i) => {
+      if (!b) return;
+      const tex = new THREE.CanvasTexture(atlas.canvases[i]);
+      tex.anisotropy = 4;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(b.p.view().slice(), 3));
+      g.setAttribute('uv', new THREE.BufferAttribute(b.uv.view().slice(), 2));
+      const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map: tex }));
+      mesh.frustumCulled = false; mesh.matrixAutoUpdate = false;
+      this.scene.add(mesh);
+    });
+    if (poles.p.n) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(poles.p.view().slice(), 3));
+      g.setAttribute('color', new THREE.BufferAttribute(poles.c.view().slice(), 3, true));
+      g.computeVertexNormals();
+      const mesh = new THREE.Mesh(g, this.mats.flat); mesh.frustumCulled = false; mesh.matrixAutoUpdate = false;
+      this.scene.add(mesh);
+    }
+    this.signCount = { plates, shops: used.length };
+  }
+
+  // Nombres flotantes sobre los sitios conocidos (Ajuntament, parques, iglesias…)
+  buildLandmarks() {
+    const ICON = { townhall: '🏛', hospital: '🏥', police: '🚓', station: '🚉', place_of_worship: '⛪', marketplace: '🛒', library: '📚',
+      school: '🏫', fire_station: '🚒', theatre: '🎭', cinema: '🎬', museum: '🏺', park: '🌳', stadium: '🏟', cemetery: '✝', building: '🏢' };
+    this.labels = [];
+    const PRIO = ['townhall', 'hospital', 'station', 'police', 'place_of_worship', 'marketplace', 'park', 'stadium', 'museum',
+      'theatre', 'cinema', 'library', 'fire_station', 'school', 'college', 'university', 'cemetery', 'bus_station'];
+    const prio = (k) => { const i = PRIO.indexOf(k); return i < 0 ? (k === 'building' ? 99 : 50) : i; };
+    const pois = this.w.map.pois.slice().sort((a, b) => prio(a.kind) - prio(b.kind));
+    const seen = new Set();
+    for (const p of pois) {
+      if (this.labels.length >= 120) break;
+      if (seen.has(p.name)) continue; seen.add(p.name);
+      const c = document.createElement('canvas'); c.width = 512; c.height = 80;
+      const g = c.getContext('2d');
+      const text = (ICON[p.kind] || '📍') + ' ' + p.name;
+      let size = 38; g.font = `bold ${size}px system-ui, sans-serif`;
+      while (g.measureText(text).width > 480 && size > 16) { size--; g.font = `bold ${size}px system-ui, sans-serif`; }
+      const tw = g.measureText(text).width + 30;
+      g.fillStyle = 'rgba(15,15,25,.72)';
+      g.beginPath(); g.roundRect ? g.roundRect(256 - tw / 2, 8, tw, 64, 14) : g.rect(256 - tw / 2, 8, tw, 64); g.fill();
+      g.fillStyle = '#ffd21f'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 256, 42);
+      const tex = new THREE.CanvasTexture(c);
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, fog: false, depthWrite: false }));
+      const b = this.w.buildingAt(p.x, p.y);
+      const h = b ? this.bHeight[b.i] || 10 : 4;
+      sp.position.set(p.x, h + 5, p.y);
+      sp.scale.set(20, 20 * 80 / 512, 1);
+      sp.visible = false;
+      this.scene.add(sp);
+      this.labels.push(sp);
     }
   }
 
@@ -453,6 +598,8 @@ class Renderer3D {
       m.visible = !!d;
       if (d) { m.position.x = d.x; m.position.z = d.y; m.scale.setScalar(d.r); m.material.color.set(d.r > 3 ? '#1a1a1a' : '#7a0d0d'); }
     });
+    const P = game.pos();
+    for (const l of this.labels) { const d = Math.hypot(l.position.x - P.x, l.position.z - P.y); l.visible = d > 12 && d < 450; }
     this.cashMeshes.forEach((m, i) => {
       const k = game.pickups[i];
       m.visible = !!k;

@@ -12,7 +12,7 @@ const MIRRORS = [
   'https://overpass.private.coffee/api/interpreter',
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ];
-const CACHE_KEY = 'santboi-map-v2';
+const CACHE_KEY = 'santboi-map-v3';
 
 function buildQuery(b) {
   const bb = `${b.s},${b.w},${b.n},${b.e}`;
@@ -34,6 +34,10 @@ function buildQuery(b) {
   node["name"]["place"~"^(suburb|neighbourhood|quarter|town)$"](${bb});
   node["name"]["tourism"~"^(museum|attraction|artwork)$"](${bb});
   way["name"]["amenity"~"^(townhall|hospital|police|marketplace|place_of_worship|school)$"](${bb});
+  way["building:part"](${bb});
+  node["name"]["shop"](${bb});
+  way["name"]["shop"](${bb});
+  node["name"]["amenity"~"^(bar|restaurant|cafe|pharmacy|bank|fast_food|pub|ice_cream|post_office|fuel|clinic|dentist|veterinary|driving_school|kindergarten|school)$"](${bb});
 );
 out geom;`;
 }
@@ -67,6 +71,26 @@ function areaKind(t) {
   if (t.natural === 'wood' || t.landuse === 'forest' || t.natural === 'scrub') return 'wood';
   if (t.leisure || t.landuse || t.natural) return 'green';
   return null;
+}
+
+const SHOP_AMENITIES = new Set(['bar', 'restaurant', 'cafe', 'pharmacy', 'bank', 'fast_food', 'pub', 'ice_cream', 'post_office',
+  'fuel', 'clinic', 'dentist', 'veterinary', 'driving_school']);
+function shopKind(s) {
+  if (s === 'supermarket' || s === 'convenience' || s === 'greengrocer' || s === 'butcher' || s === 'bakery' || s === 'pastry' || s === 'deli' || s === 'seafood') return 'food';
+  if (s === 'hairdresser' || s === 'beauty') return 'hair';
+  return 'shop';
+}
+// Tipo de edificio para elegir fachada
+function buildingKind(t) {
+  const b = t.building, a = t.amenity;
+  if (b === 'church' || b === 'chapel' || b === 'cathedral' || a === 'place_of_worship') return 'church';
+  if (b === 'school' || b === 'university' || b === 'college' || b === 'kindergarten' || a === 'school' || a === 'kindergarten') return 'school';
+  if (b === 'industrial' || b === 'warehouse' || b === 'factory' || b === 'hangar') return 'industrial';
+  if (b === 'house' || b === 'detached' || b === 'semidetached_house' || b === 'terrace' || b === 'bungalow') return 'house';
+  if (b === 'garage' || b === 'garages' || b === 'shed' || b === 'roof' || b === 'hut' || b === 'kiosk') return 'shed';
+  if (b === 'retail' || b === 'supermarket' || b === 'commercial' || b === 'office') return 'commercial';
+  if (a === 'townhall' || b === 'public' || b === 'civic' || b === 'government' || a === 'hospital' || b === 'hospital' || b === 'sports_hall' || b === 'stadium') return 'public';
+  return '';
 }
 
 // Altura del edificio en metros (0 = desconocida)
@@ -119,12 +143,15 @@ function assembleRings(members) {
 
 // Convierte la respuesta de Overpass en el formato interno del juego
 SB.processOSM = function (osm) {
-  const map = { roads: [], buildings: [], areas: [], waterLines: [], rails: [], pois: [], places: [], bh: [], source: 'osm' };
+  const map = { roads: [], buildings: [], areas: [], waterLines: [], rails: [], pois: [], places: [], bh: [], bk: [], shops: [], source: 'osm' };
+  const parts = [];
+  const centroid = (pts) => { let cx = 0, cy = 0; const n = pts.length / 2; for (let i = 0; i < pts.length; i += 2) { cx += pts[i]; cy += pts[i + 1]; } return [cx / n, cy / n]; };
   for (const el of osm.elements || []) {
     const t = el.tags || {};
     if (el.type === 'node') {
       if (!t.name) continue;
       if (t.place) { map.places.push({ x: px(el.lon), y: py(el.lat), name: t.name, big: t.place === 'town' }); continue; }
+      if (t.shop || SHOP_AMENITIES.has(t.amenity)) { map.shops.push({ x: px(el.lon), y: py(el.lat), name: t.name, kind: t.shop ? shopKind(t.shop) : t.amenity }); continue; }
       let kind = t.amenity || (t.railway === 'station' ? 'station' : t.tourism) || 'poi';
       map.pois.push({ x: px(el.lon), y: py(el.lat), name: t.name, kind });
       continue;
@@ -158,14 +185,25 @@ SB.processOSM = function (osm) {
       });
       continue;
     }
+    if (t['building:part'] && closed && !t.building) {
+      const h = buildingHeight(t);
+      if (h) { const [cx, cy] = centroid(pts); parts.push([cx, cy, h]); }
+      continue;
+    }
     if (t.building && closed) {
       map.buildings.push(pts);
       map.bh.push(buildingHeight(t));
-      if (t.name && (t.amenity === 'townhall' || t.amenity === 'hospital' || t.amenity === 'police' || t.amenity === 'place_of_worship' || t.amenity === 'marketplace')) {
-        let cx = 0, cy = 0; const n = pts.length / 2;
-        for (let i = 0; i < pts.length; i += 2) { cx += pts[i]; cy += pts[i + 1]; }
-        map.pois.push({ x: cx / n, y: cy / n, name: t.name, kind: t.amenity });
+      map.bk.push(buildingKind(t));
+      if (t.name) {
+        const [cx, cy] = centroid(pts);
+        if (t.shop) map.shops.push({ x: cx, y: cy, name: t.name, kind: shopKind(t.shop) });
+        else map.pois.push({ x: cx, y: cy, name: t.name, kind: t.amenity || (t.building === 'church' ? 'place_of_worship' : 'building') });
       }
+      continue;
+    }
+    if (t.shop && t.name && closed) {
+      const [cx, cy] = centroid(pts);
+      map.shops.push({ x: cx, y: cy, name: t.name, kind: shopKind(t.shop) });
       continue;
     }
     if (t.railway) { if (t.tunnel !== 'yes') map.rails.push(pts); continue; }
@@ -174,11 +212,36 @@ SB.processOSM = function (osm) {
       continue;
     }
     const kind = areaKind(t);
-    if (kind && closed) map.areas.push({ kind, rings: [pts] });
-    else if (t.amenity && t.name && closed) {
-      let cx = 0, cy = 0; const n = pts.length / 2;
-      for (let i = 0; i < pts.length; i += 2) { cx += pts[i]; cy += pts[i + 1]; }
-      map.pois.push({ x: cx / n, y: cy / n, name: t.name, kind: t.amenity });
+    if (kind && closed) {
+      map.areas.push({ kind, rings: [pts] });
+      if (t.name && (t.leisure === 'park' || t.leisure === 'garden' || t.leisure === 'stadium' || t.leisure === 'sports_centre' || t.landuse === 'cemetery')) {
+        const [cx, cy] = centroid(pts);
+        map.pois.push({ x: cx, y: cy, name: t.name, kind: t.leisure === 'stadium' || t.leisure === 'sports_centre' ? 'stadium' : t.landuse === 'cemetery' ? 'cemetery' : 'park' });
+      }
+    } else if (t.amenity && t.name && closed) {
+      const [cx, cy] = centroid(pts);
+      map.pois.push({ x: cx, y: cy, name: t.name, kind: t.amenity });
+    }
+  }
+  // alturas de las partes de edificio (Catastro) -> edificio que las contiene
+  if (parts.length) {
+    const G = 40, grid = new Map();
+    map.buildings.forEach((p, i) => {
+      let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+      for (let k = 0; k < p.length; k += 2) { a = Math.min(a, p[k]); c = Math.max(c, p[k]); b = Math.min(b, p[k + 1]); d = Math.max(d, p[k + 1]); }
+      if ((c - a) * (d - b) > 400000) return;
+      for (let x = Math.floor(a / G); x <= Math.floor(c / G); x++) for (let y = Math.floor(b / G); y <= Math.floor(d / G); y++) {
+        const k = x + ',' + y; let l = grid.get(k); if (!l) grid.set(k, l = []); l.push(i);
+      }
+    });
+    for (const [x, y, h] of parts) {
+      const l = grid.get(Math.floor(x / G) + ',' + Math.floor(y / G)); if (!l) continue;
+      for (const i of l) {
+        const p = map.buildings[i]; let inside = false;
+        for (let k = 0, j = p.length - 2; k < p.length; j = k, k += 2)
+          if ((p[k + 1] > y) !== (p[j + 1] > y) && x < (p[j] - p[k]) * (y - p[k + 1]) / (p[j + 1] - p[k + 1]) + p[k]) inside = !inside;
+        if (inside) { if (h > map.bh[i]) map.bh[i] = h; break; }
+      }
     }
   }
   map.roads.sort((a, b) => a.rank - b.rank);

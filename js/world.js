@@ -74,7 +74,7 @@ class World {
     m.buildings.forEach((p, i) => {
       const bb = bbox(p);
       const hue = ROOFS[(i * 2654435761 >>> 0) % ROOFS.length];
-      const b = { pts: p, bb, color: hue };
+      const b = { pts: p, bb, color: hue, i };
       this.buildings.push(b);
       this.insertTiles(bb, 3, 'buildings', b);
       // no colisionamos con edificios enormes mal cerrados
@@ -218,6 +218,38 @@ class World {
       if (!moved) break;
     }
     return res;
+  }
+
+  // Distancia (m) desde un punto al borde de la calle más cercana
+  roadDist(x, y) {
+    const cx = Math.floor(x / CG), cy = Math.floor(y / CG);
+    let best = Infinity;
+    for (let i = cx - 1; i <= cx + 1; i++) for (let j = cy - 1; j <= cy + 1; j++) {
+      const l = this.segGrid.get(key(i, j)); if (!l) continue;
+      for (let k = 0; k < l.length; k += 2) {
+        const r = this.map.roads[l[k]]; if (!r.drive && r.type !== 'pedestrian') continue;
+        const p = r.pts, s = l[k + 1];
+        const d = Math.sqrt(segDist2(x, y, p[s], p[s + 1], p[s + 2], p[s + 3])) - r.w / 2;
+        if (d < best) best = d;
+      }
+    }
+    return best;
+  }
+
+  buildingsNear(x, y, r) {
+    const out = new Set();
+    for (let i = Math.floor((x - r) / CG); i <= Math.floor((x + r) / CG); i++)
+      for (let j = Math.floor((y - r) / CG); j <= Math.floor((y + r) / CG); j++) {
+        const l = this.bGrid.get(key(i, j)); if (l) for (const b of l) out.add(b);
+      }
+    return out;
+  }
+
+  buildingAt(x, y) {
+    const l = this.bGrid.get(key(Math.floor(x / CG), Math.floor(y / CG)));
+    if (!l) return null;
+    for (const b of l) if (pointInPoly(x, y, b.pts, b.bb)) return b;
+    return null;
   }
 
   isInsideBuilding(x, y) {
@@ -384,6 +416,14 @@ class World {
   }
 }
 
+function pointInPoly(x, y, p, bb) {
+  if (bb && (x < bb[0] || x > bb[2] || y < bb[1] || y > bb[3])) return false;
+  let inside = false;
+  for (let k = 0, m = p.length - 2; k < p.length; m = k, k += 2)
+    if ((p[k + 1] > y) !== (p[m + 1] > y) && x < (p[m] - p[k]) * (y - p[k + 1]) / (p[m + 1] - p[k + 1]) + p[k]) inside = !inside;
+  return inside;
+}
+
 function segDist2(x, y, x1, y1, x2, y2) {
   const dx = x2 - x1, dy = y2 - y1, L = dx * dx + dy * dy;
   let t = L ? ((x - x1) * dx + (y - y1) * dy) / L : 0; t = t < 0 ? 0 : t > 1 ? 1 : t;
@@ -392,4 +432,5 @@ function segDist2(x, y, x1, y1, x2, y2) {
 
 SB.World = World;
 SB.segDist2 = segDist2;
+SB.pointInPoly = pointInPoly;
 })();
