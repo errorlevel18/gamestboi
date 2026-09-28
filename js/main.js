@@ -7,6 +7,9 @@ const status = $('status'), playBtn = $('play');
 let map = null, game = null;
 
 function setStatus(t, err) { status.textContent = t; status.className = err ? 'err' : ''; }
+// durante la descarga se muestra el botón para cambiar de servidor
+function showSkip(on) { $('skip').style.display = on ? 'inline-block' : 'none'; }
+$('skip').onclick = () => { SB.skipServer(); setStatus('Probando otro servidor…'); };
 
 function ready(m, note) {
   map = m;
@@ -23,11 +26,13 @@ async function load(force) {
     if (cached) { ready(cached, 'Mapa de Sant Boi (guardado)'); return; }
   } else await SB.clearCachedMap();
   try {
-    const m = await SB.downloadMap((t) => setStatus(t));
+    const m = await SB.downloadMap((t, busy) => { setStatus(t); showSkip(!!busy); });
+    showSkip(false);
     SB.saveCachedMap(m);
-    ready(m, 'Mapa de Sant Boi descargado');
+    ready(m, 'Mapa de Sant Boi descargado' + (m.skipped && m.skipped.length ? ` (sin ${m.skipped.join(', ')}: pulsa "Volver a descargar" más tarde)` : ''));
   } catch (e) {
-    setStatus('No se pudo descargar el mapa de OpenStreetMap (' + e.message + '). Puedes reintentar o jugar con el mapa aproximado.', true);
+    showSkip(false);
+    setStatus('No se pudo descargar el mapa de OpenStreetMap (' + e.message + '). Lo ya descargado se ha guardado: pulsa "Volver a descargar el mapa" para continuar, o juega con el mapa aproximado.', true);
   }
 }
 

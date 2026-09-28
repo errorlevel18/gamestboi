@@ -14,38 +14,44 @@ const MIRRORS = [
 ];
 const CACHE_KEY = 'santboi-map-v5';
 
-function buildQuery(b) {
-  const bb = `${b.s},${b.w},${b.n},${b.e}`;
-  return `[out:json][timeout:120];
-(
+// La descarga se hace por partes: consultas pequeñas que el servidor no corta por tiempo.
+// "essential": sin esa parte no se puede jugar; las demás se pueden saltar si fallan.
+const PARTS = [
+  { id: 'roads', label: 'calles', essential: true, q: (bb) => `
   way["highway"](${bb});
+  way["railway"~"^(rail|light_rail|narrow_gauge)$"](${bb});
+  way["waterway"~"^(river|riverbank|canal|stream)$"](${bb});` },
+  { id: 'buildings', label: 'edificios', essential: true, q: (bb) => `
   way["building"](${bb});
+  way["building:part"](${bb});
+  way["name"]["amenity"~"^(townhall|hospital|police|marketplace|place_of_worship|school)$"](${bb});
+  way["name"]["shop"](${bb});` },
+  { id: 'nature', label: 'parques, agua y árboles', q: (bb) => `
   way["leisure"~"^(park|garden|pitch|playground|stadium|sports_centre|track|dog_park|nature_reserve)$"](${bb});
   way["landuse"~"^(grass|forest|meadow|farmland|orchard|recreation_ground|cemetery|village_green|allotments|vineyard|flowerbed|plant_nursery)$"](${bb});
   way["natural"~"^(water|wood|scrub|grassland|beach|sand|wetland|heath|tree_row)$"](${bb});
   node["natural"="tree"](${bb});
-  way["waterway"~"^(river|riverbank|canal|stream)$"](${bb});
-  way["railway"~"^(rail|light_rail|narrow_gauge)$"](${bb});
-  relation["type"="multipolygon"]["natural"~"^(water|wood|scrub)$"](${bb});
+  relation["type"="multipolygon"]["natural"~"^(water|wood|scrub|grassland|heath|wetland)$"](${bb});
   relation["type"="multipolygon"]["landuse"~"^(forest|grass|meadow|farmland|cemetery|orchard|allotments|recreation_ground|village_green)$"](${bb});
   relation["type"="multipolygon"]["leisure"~"^(park|garden|playground|nature_reserve)$"](${bb});
-  relation["type"="multipolygon"]["natural"~"^(grassland|heath|wetland)$"](${bb});
-  relation["type"="multipolygon"]["waterway"="riverbank"](${bb});
+  relation["type"="multipolygon"]["waterway"="riverbank"](${bb});` },
+  { id: 'places', label: 'tiendas, lugares y mobiliario', q: (bb) => `
   node["name"]["amenity"~"^(townhall|hospital|police|fire_station|marketplace|place_of_worship|library|theatre|cinema|university|college|bus_station)$"](${bb});
   node["name"]["railway"="station"](${bb});
   node["name"]["place"~"^(suburb|neighbourhood|quarter|town)$"](${bb});
   node["name"]["tourism"~"^(museum|attraction|artwork)$"](${bb});
-  way["name"]["amenity"~"^(townhall|hospital|police|marketplace|place_of_worship|school)$"](${bb});
-  way["building:part"](${bb});
   node["name"]["shop"](${bb});
-  way["name"]["shop"](${bb});
   node["name"]["amenity"~"^(bar|restaurant|cafe|pharmacy|bank|fast_food|pub|ice_cream|post_office|fuel|clinic|dentist|veterinary|driving_school|kindergarten|school)$"](${bb});
   node["highway"~"^(traffic_signals|crossing|bus_stop|street_lamp)$"](${bb});
-  node["amenity"~"^(bench|fountain|drinking_water|waste_basket|recycling|waste_disposal|post_box)$"](${bb});
-);
-out geom;
-relation["route"="bus"](${bb});
-out geom(${bb});`;
+  node["amenity"~"^(bench|fountain|drinking_water|waste_basket|recycling|waste_disposal|post_box)$"](${bb});` },
+  { id: 'bus', label: 'líneas de bus', relOnly: true, q: (bb) => `relation["route"="bus"](${bb});` },
+];
+
+function partQuery(part, b) {
+  const bb = `${b.s},${b.w},${b.n},${b.e}`;
+  // las rutas de bus se recortan al área para no traer todo su recorrido
+  if (part.relOnly) return `[out:json][timeout:90];${part.q(bb)}out geom(${bb});`;
+  return `[out:json][timeout:90];(${part.q(bb)});out geom;`;
 }
 
 // ---------- Proyección lat/lon -> metros ----------
@@ -333,46 +339,99 @@ SB.processOSM = function (osm) {
   return map;
 };
 
-async function fetchWithTimeout(url, opts, ms) {
+let currentCtl = null, skipRequested = false;
+// Botón "Probar otro servidor": corta la petición actual y pasa al siguiente
+SB.skipServer = function () { skipRequested = true; if (currentCtl) currentCtl.abort(); };
+
+async function fetchPart(url, body, ms) {
   const ctl = new AbortController();
+  currentCtl = ctl;
   const id = setTimeout(() => ctl.abort(), ms);
-  try { return await fetch(url, { ...opts, signal: ctl.signal }); }
-  finally { clearTimeout(id); }
+  try {
+    const res = await fetch(url, { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctl.signal });
+    if (!res.ok) throw new Error(res.status === 429 ? 'servidor saturado' : res.status === 504 ? 'el servidor tardó demasiado' : 'HTTP ' + res.status);
+    const json = await res.json();
+    if (json.remark && /runtime error|timed out|out of memory/i.test(json.remark)) throw new Error('el servidor no pudo terminar');
+    return json;
+  } catch (e) {
+    if (ctl.signal.aborted) throw new Error(skipRequested ? 'saltado' : 'tiempo agotado');
+    throw e;
+  } finally { clearTimeout(id); currentCtl = null; }
 }
 
+// onStatus(texto, descargando): informa del progreso
 SB.downloadMap = async function (onStatus) {
-  const body = 'data=' + encodeURIComponent(buildQuery(SB.BBOX));
-  let lastErr;
-  for (const url of MIRRORS) {
-    const host = new URL(url).host;
-    try {
-      onStatus(`Descargando calles de Sant Boi desde ${host}…`);
-      const res = await fetchWithTimeout(url, {
-        method: 'POST', body,
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      }, 150000);
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      onStatus('Procesando mapa…');
-      const json = await res.json();
-      if (!json.elements || json.elements.length < 50) throw new Error('respuesta vacía');
-      return SB.processOSM(json);
-    } catch (e) {
-      lastErr = e;
-      console.warn('Overpass', host, e);
+  const elements = [], seen = new Set(), skipped = [];
+  let preferred = 0;
+  for (let i = 0; i < PARTS.length; i++) {
+    const part = PARTS[i];
+    let json = await partCache('get', part.id);
+    if (!json) {
+      const body = 'data=' + encodeURIComponent(partQuery(part, SB.BBOX));
+      let lastErr;
+      for (let k = 0; k < MIRRORS.length && !json; k++) {
+        const url = MIRRORS[(preferred + k) % MIRRORS.length], host = new URL(url).host;
+        const t0 = Date.now();
+        const tick = () => onStatus(`Descargando ${part.label} (${i + 1}/${PARTS.length}) desde ${host}… ${Math.round((Date.now() - t0) / 1000)} s`, true);
+        tick();
+        const timer = setInterval(tick, 1000);
+        skipRequested = false;
+        try {
+          json = await fetchPart(url, body, part.essential ? 120000 : 75000);
+          preferred = (preferred + k) % MIRRORS.length; // seguimos con el servidor que responde
+        } catch (e) {
+          lastErr = e;
+          console.warn('Overpass', host, part.id, e);
+        } finally { clearInterval(timer); }
+      }
+      if (!json) {
+        if (part.essential) throw new Error(`no se pudieron descargar las ${part.label}: ${lastErr ? lastErr.message : 'sin conexión'}`);
+        skipped.push(part.label);
+        continue;
+      }
+      await partCache('put', part.id, json);
+    }
+    for (const el of json.elements || []) {
+      const k = el.type[0] + el.id;
+      if (seen.has(k)) continue;
+      seen.add(k); elements.push(el);
     }
   }
-  throw lastErr || new Error('sin conexión');
+  onStatus('Procesando mapa…', true);
+  await new Promise(r => setTimeout(r, 30));
+  if (elements.length < 50) throw new Error('respuesta vacía');
+  const map = SB.processOSM({ elements });
+  map.skipped = skipped;
+  await partCache('clear');
+  return map;
 };
 
 // Caché en IndexedDB (el mapa real puede ocupar varios MB, demasiado para localStorage)
 function idb() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open('santboi-gta', 1);
-    req.onupgradeneeded = () => req.result.createObjectStore('maps');
+    const req = indexedDB.open('santboi-gta', 2);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('maps')) db.createObjectStore('maps');
+      if (!db.objectStoreNames.contains('parts')) db.createObjectStore('parts');
+    };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
 }
+
+// Caché de partes ya descargadas (por si falla alguna, al reintentar no se repiten)
+async function partCache(op, id, value) {
+  try {
+    const db = await idb();
+    const st = (mode) => db.transaction('parts', mode).objectStore('parts');
+    const req = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    if (op === 'get') return (await req(st('readonly').get(CACHE_KEY + ':' + id))) || null;
+    if (op === 'put') return await req(st('readwrite').put(value, CACHE_KEY + ':' + id));
+    if (op === 'clear') return await req(st('readwrite').clear());
+  } catch (e) { return null; }
+}
+
 SB.loadCachedMap = async function () {
   try {
     const db = await idb();
