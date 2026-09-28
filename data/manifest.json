@@ -1,0 +1,32 @@
+{
+ "date": "2026-09-28T15:13:36.813Z",
+ "bbox": {
+  "s": 41.3265,
+  "w": 2.013,
+  "n": 41.36,
+  "e": 2.058
+ },
+ "source": "© OpenStreetMap contributors (ODbL), vía Geofabrik",
+ "parts": {
+  "roads": {
+   "elements": 4209,
+   "bytes": 1984363
+  },
+  "buildings": {
+   "elements": 23748,
+   "bytes": 12429853
+  },
+  "nature": {
+   "elements": 1712,
+   "bytes": 851805
+  },
+  "places": {
+   "elements": 4077,
+   "bytes": 873984
+  },
+  "bus": {
+   "elements": 81,
+   "bytes": 1054947
+  }
+ }
+}
