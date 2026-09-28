@@ -60,6 +60,7 @@ class Renderer3D {
       flat: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
       roof: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
     };
+    this.models = new SB.Models(THREE);
     this.atlas = SB.buildFacadeAtlas(THREE);
     this.mats.wall = this.wallMaterial(this.atlas);
     this.bHeight = new Float32Array(world.buildings.length);
@@ -70,7 +71,6 @@ class Renderer3D {
     this.buildDynamicPools();
     this.meshes = new Map();
     this.boxGeo = new THREE.BoxGeometry(1, 1, 1);
-    this.models = new SB.Models(THREE);
     this.matCache = new Map();
     this.yaw = null;
     this.camPos = new THREE.Vector3();
@@ -127,6 +127,7 @@ class Renderer3D {
     // edificios
     this.w.buildings.forEach((bd, i) => this.building(B, bd, (m.bh && m.bh[i]) || 0, i));
     this.trees();
+    this.buildCity(B);
 
     for (const bt of B.map.values()) {
       if (!bt.p.n) continue;
@@ -316,6 +317,16 @@ class Renderer3D {
       }
     }
 
+    // Paradas de bus: letrero con el nombre en un poste junto a la marquesina
+    for (const p of (w.city ? w.city.props : [])) {
+      if (p.k !== 'busstop' || !p.name) continue;
+      const f = p.face != null ? p.face : p.a, al = f + Math.PI / 2;
+      const x = p.x + Math.cos(f) * 0.6 + Math.cos(al) * 2.6, z = p.y + Math.sin(f) * 0.6 + Math.sin(al) * 2.6;
+      const t = atlas.add(p.name, 'bus'), W = 2.4, H = W / R, y = w.terrain.at(x, z) + 2.7;
+      quad(t, x, y, z, Math.cos(f), Math.sin(f), W, H);
+      quad(t, x, y, z, -Math.cos(f), -Math.sin(f), W, H);
+    }
+
     // Letreros de tiendas, bares, farmacias… en la fachada que da a la calle
     const used = [];
     for (const sh of m.shops || []) {
@@ -465,6 +476,99 @@ class Renderer3D {
       crown.instanceMatrix.needsUpdate = true; if (crown.instanceColor) crown.instanceColor.needsUpdate = true;
       this.scene.add(crown); if (trunk) this.scene.add(trunk);
     }
+  }
+
+  // ---------- mobiliario urbano, semáforos y tren ----------
+  buildCity(B) {
+    const city = this.w.city, T = this.w.terrain;
+    if (!city) return;
+    const C = (h) => col(h);
+    const box = (x, y, z, sx, sy, sz, a, c) => {
+      const bt = B.get(x, z, 'flat'), ca = Math.cos(a), sa = Math.sin(a);
+      const P = (dx, dy, dz) => [x + ca * dx - sa * dz, y + dy, z + sa * dx + ca * dz];
+      const hx = sx / 2, hz = sz / 2;
+      const v = [P(-hx, 0, -hz), P(hx, 0, -hz), P(hx, 0, hz), P(-hx, 0, hz), P(-hx, sy, -hz), P(hx, sy, -hz), P(hx, sy, hz), P(-hx, sy, hz)];
+      const quad = (a1, b1, c1, d1) => { pushTri(bt, ...v[a1], ...v[b1], ...v[c1], c); pushTri(bt, ...v[a1], ...v[c1], ...v[d1], c); };
+      quad(4, 5, 6, 7); quad(0, 1, 5, 4); quad(1, 2, 6, 5); quad(2, 3, 7, 6); quad(3, 0, 4, 7);
+    };
+    const pole = C('#3d4247'), lampHead = C('#dfe3e6'), wood = C('#8b5a2b'), dark = C('#2b2e31'), glass = C('#a9cfdc');
+    const RC = [C('#2e7d32'), C('#f9c80e'), C('#1565c0'), C('#6d4c41')];
+    for (const p of city.props) {
+      const g = T.at(p.x, p.y), a = p.a || 0, ca = Math.cos(a), sa = Math.sin(a);
+      if (p.k === 'lamp') {
+        box(p.x, g - 0.2, p.y, 0.16, 7.2, 0.16, a, pole);
+        box(p.x + ca * 0.8, g + 6.85, p.y + sa * 0.8, 1.6, 0.1, 0.1, a, pole);
+        box(p.x + ca * 1.6, g + 6.7, p.y + sa * 1.6, 0.6, 0.18, 0.32, a, lampHead);
+      } else if (p.k === 'bench') {
+        box(p.x, g + 0.4, p.y, 1.8, 0.07, 0.45, a, wood);
+        box(p.x - sa * 0.22, g + 0.47, p.y + ca * 0.22, 1.8, 0.45, 0.06, a, wood);
+        box(p.x + ca * 0.75, g - 0.1, p.y + sa * 0.75, 0.08, 0.5, 0.4, a, dark);
+        box(p.x - ca * 0.75, g - 0.1, p.y - sa * 0.75, 0.08, 0.5, 0.4, a, dark);
+      } else if (p.k === 'fountain') {
+        box(p.x, g - 0.1, p.y, 0.32, 1.15, 0.32, a, C('#2f4f3a'));
+        box(p.x + ca * 0.25, g + 0.5, p.y + sa * 0.25, 0.5, 0.08, 0.35, a, C('#2f4f3a'));
+      } else if (p.k === 'bin') box(p.x, g - 0.1, p.y, 0.45, 0.95, 0.45, a, C('#3e4a3d'));
+      else if (p.k === 'postbox') box(p.x, g - 0.1, p.y, 0.5, 1.25, 0.42, a, C('#f6c90e'));
+      else if (p.k === 'recycle') {
+        for (let k = 0; k < 4; k++) {
+          const o = -2.6 + k * 1.75, x = p.x + ca * o, y = p.y + sa * o;
+          box(x, g - 0.1, y, 1.6, 1.65, 1.3, a, RC[k]);
+          box(x, g + 1.55, y, 1.62, 0.08, 1.32, a, dark);
+        }
+      } else if (p.k === 'busstop') {
+        const f = p.face != null ? p.face : a, fx = Math.cos(f), fy = Math.sin(f), al = f + Math.PI / 2;
+        const bx = p.x - fx * 0.75, by = p.y - fy * 0.75; // panel trasero, lejos de la calle
+        box(bx, g - 0.1, by, 0.06, 2.4, 4.2, f, glass);
+        box(p.x, g + 2.45, p.y, 1.8, 0.12, 4.4, f, C('#c62828'));
+        for (const s of [-2, 2]) box(bx + Math.cos(al) * s, g - 0.1, by + Math.sin(al) * s, 0.1, 2.55, 0.1, f, pole);
+        box(p.x - fx * 0.45, g + 0.42, p.y - fy * 0.45, 0.4, 0.07, 2.4, f, C('#9aa0a6'));
+        box(p.x + fx * 0.6 + Math.cos(al) * 2.6, g - 0.1, p.y + fy * 0.6 + Math.sin(al) * 2.6, 0.08, 2.5, 0.08, f, pole);
+      }
+    }
+    // semáforos: poste y caja; la luz encendida es una instancia que se mueve y cambia de color
+    for (const h of city.heads) {
+      const g = T.at(h.x, h.y), ca = Math.cos(h.a), sa = Math.sin(h.a);
+      box(h.x, g - 0.2, h.y, 0.13, 3.9, 0.13, h.a, pole);
+      box(h.x + ca * 0.05, g + 2.55, h.y + sa * 0.05, 0.3, 1.05, 0.34, h.a, C('#1c1c1c'));
+      for (let k = 0; k < 3; k++) box(h.x + ca * 0.2, g + 2.63 + k * 0.32, h.y + sa * 0.2, 0.04, 0.2, 0.2, h.a, C('#3a3a3a'));
+      h.g = g;
+    }
+    if (city.heads.length) {
+      this.bulbs = new THREE.InstancedMesh(new THREE.SphereGeometry(0.13, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }), city.heads.length);
+      this.bulbs.frustumCulled = false;
+      this.scene.add(this.bulbs);
+      this.bulbsDirty = true;
+    }
+    // tren
+    this.trainMeshes = [];
+    if (city.train) for (let k = 0; k < city.train.cars; k++) {
+      const m = this.models.train(city.train.carLen, k === 0 || k === city.train.cars - 1);
+      m.visible = false; this.scene.add(m); this.trainMeshes.push(m);
+    }
+  }
+
+  updateCity(game) {
+    const city = this.w.city; if (!city) return;
+    if (this.bulbs) {
+      const M = new THREE.Matrix4(), Cc = new THREE.Color();
+      const COLS = { r: 0xff2a2a, y: 0xffc21f, g: 0x3cff5a };
+      city.heads.forEach((h, i) => {
+        if (h.shown === h.state && !this.bulbsDirty) return;
+        h.shown = h.state;
+        const slot = h.state === 'r' ? 2 : h.state === 'y' ? 1 : 0;
+        M.makeTranslation(h.x + Math.cos(h.a) * 0.24, h.g + 2.73 + slot * 0.32, h.y + Math.sin(h.a) * 0.24);
+        this.bulbs.setMatrixAt(i, M); this.bulbs.setColorAt(i, Cc.set(COLS[h.state]));
+        this.bulbs.instanceMatrix.needsUpdate = true; this.bulbs.instanceColor.needsUpdate = true;
+      });
+      this.bulbsDirty = false;
+    }
+    const cars = city.trainCars();
+    cars.forEach((c, k) => {
+      const m = this.trainMeshes[k]; if (!m) return;
+      m.visible = true;
+      m.position.set(c.x, this.w.terrain.at(c.x, c.y) + 0.35, c.y);
+      m.rotation.y = -c.a + (city.train.dir < 0 ? Math.PI : 0);
+    });
   }
 
   // ---------- objetos dinámicos ----------
@@ -739,6 +843,7 @@ class Renderer3D {
   render(game, dt) {
     this.dt = dt;
     this.updateTerrain(game);
+    this.updateCity(game);
     this.syncEntities(game);
     this.updateCamera(game, dt);
     this.renderer.render(this.scene, this.camera);

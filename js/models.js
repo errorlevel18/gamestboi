@@ -278,6 +278,22 @@ class Models {
     return g;
   }
 
+  // Vagón de tren (FGC: blanco con franja naranja)
+  train(L, cab) {
+    const T = this.T, g = new T.Group(), W = 2.9, H = 3.4;
+    const white = this.m('#eef0f0', { phong: true }), orange = this.m('#ef7d00', { phong: true }), glass = this.m('#1e2a36', { phong: true, shininess: 120 });
+    const grey = this.m('#8d9296'), dark = this.m('#222');
+    this.add(g, this.box, white, L, H - 0.6, W, 0, 0.6 + (H - 0.6) / 2, 0);
+    this.add(g, this.box, glass, L * 0.94, 0.9, W + 0.02, 0, 2.3, 0);
+    this.add(g, this.box, orange, L * 1.001, 0.35, W + 0.03, 0, 1.2, 0);
+    this.add(g, this.box, grey, L * 0.98, 0.25, W * 0.9, 0, H + 0.1, 0);
+    for (const s of [0.35, -0.35]) this.add(g, this.box, dark, 2.6, 0.6, W * 0.8, s * L, 0.3, 0);
+    for (const s of [-0.25, 0.25]) for (const z of [1, -1]) this.add(g, this.box, this.m('#9aa0a4'), 1.3, 2.1, 0.03, s * L, 1.65, z * (W / 2 + 0.02));
+    if (cab) { this.add(g, this.box, glass, 0.05, 1.1, W * 0.85, L / 2 + 0.01, 2.2, 0); this.add(g, this.box, glass, 0.05, 1.1, W * 0.85, -L / 2 - 0.01, 2.2, 0); }
+    this.collapse(g, () => false, true);
+    return g;
+  }
+
   // Anima ruedas: giro según la velocidad y dirección de las delanteras
   animateCar(g, car, dt, steer) {
     const u = g.userData;

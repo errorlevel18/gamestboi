@@ -14,11 +14,23 @@ class Sfx {
       const len = this.ctx.sampleRate;
       this.noise = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
       const d = this.noise.getChannelData(0); for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-      // motor
-      this.eng = this.ctx.createOscillator(); this.eng.type = 'sawtooth';
-      this.engF = this.ctx.createBiquadFilter(); this.engF.type = 'lowpass'; this.engF.frequency.value = 400;
-      this.engG = this.ctx.createGain(); this.engG.gain.value = 0;
-      this.eng.connect(this.engF); this.engF.connect(this.engG); this.engG.connect(this.master); this.eng.start();
+      // motor: dos osciladores suaves (triángulo + subgrave) muy filtrados, con un leve pulso de combustión
+      const c = this.ctx;
+      this.eng = c.createOscillator(); this.eng.type = 'triangle';
+      this.eng2 = c.createOscillator(); this.eng2.type = 'sine';
+      this.engF = c.createBiquadFilter(); this.engF.type = 'lowpass'; this.engF.frequency.value = 220; this.engF.Q.value = 0.4;
+      this.engG = c.createGain(); this.engG.gain.value = 0;
+      this.puls = c.createOscillator(); this.puls.type = 'sine'; this.puls.frequency.value = 12;
+      this.pulsG = c.createGain(); this.pulsG.gain.value = 0;
+      this.puls.connect(this.pulsG); this.pulsG.connect(this.engG.gain);
+      this.eng.connect(this.engF); this.eng2.connect(this.engF); this.engF.connect(this.engG); this.engG.connect(this.master);
+      this.eng.start(); this.eng2.start(); this.puls.start();
+      // rodadura y viento: ruido filtrado que sube con la velocidad
+      this.road = c.createBufferSource(); this.road.buffer = this.noise; this.road.loop = true;
+      this.roadF = c.createBiquadFilter(); this.roadF.type = 'bandpass'; this.roadF.frequency.value = 350; this.roadF.Q.value = 0.6;
+      this.roadG = c.createGain(); this.roadG.gain.value = 0;
+      this.road.connect(this.roadF); this.roadF.connect(this.roadG); this.roadG.connect(this.master); this.road.start();
+      this.gear = 1;
       // sirena
       this.sir = this.ctx.createOscillator(); this.sir.type = 'triangle';
       this.sirG = this.ctx.createGain(); this.sirG.gain.value = 0;
@@ -26,18 +38,40 @@ class Sfx {
     } catch (e) { this.ctx = null; }
   }
 
-  toggleMute() { this.muted = !this.muted; if (this.master) this.master.gain.value = this.muted ? 0 : 0.5; return this.muted; }
+  // Botón de sonido: todo -> sin motor -> silencio
+  cycleMode() {
+    this.mode = ((this.mode || 0) + 1) % 3;
+    this.muted = this.mode === 2;
+    this.noEngine = this.mode >= 1;
+    if (this.master) this.master.gain.value = this.muted ? 0 : 0.5;
+    return this.mode;
+  }
+  toggleMute() { return this.cycleMode() === 2; }
 
-  engine(level, siren) {
+  // level: velocidad / velocidad máxima (-1 = a pie); throttle: acelerador (0..1)
+  engine(level, siren, throttle = 0) {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
-    if (level < 0) this.engG.gain.setTargetAtTime(0, t, 0.1);
-    else {
-      this.engG.gain.setTargetAtTime(0.06 + level * 0.05, t, 0.1);
-      this.eng.frequency.setTargetAtTime(45 + level * 140, t, 0.08);
-      this.engF.frequency.setTargetAtTime(300 + level * 900, t, 0.1);
+    if (level < 0 || this.noEngine) {
+      this.engG.gain.setTargetAtTime(0, t, 0.15); this.pulsG.gain.setTargetAtTime(0, t, 0.15);
+      this.roadG.gain.setTargetAtTime(level < 0 ? 0 : Math.min(0.05, level * level * 0.06), t, 0.3);
+    } else {
+      // cambio de marchas: el régimen sube dentro de cada marcha y baja al cambiar
+      const G = [0, 0.14, 0.3, 0.48, 0.68, 1.01];
+      let g = 1; while (g < 5 && level > G[g]) g++;
+      const rpm = Math.max(0, Math.min(1, (level - G[g - 1]) / (G[g] - G[g - 1])));
+      const thr = Math.max(0, throttle);
+      const f = 34 + rpm * 44 + g * 4;
+      this.eng.frequency.setTargetAtTime(f, t, 0.12);
+      this.eng2.frequency.setTargetAtTime(f / 2, t, 0.12);
+      this.engF.frequency.setTargetAtTime(160 + rpm * 160 + thr * 220, t, 0.15);
+      const vol = 0.012 + thr * (0.018 + rpm * 0.012);
+      this.engG.gain.setTargetAtTime(vol, t, 0.25);
+      this.pulsG.gain.setTargetAtTime(vol * 0.25, t, 0.25);
+      this.puls.frequency.setTargetAtTime(8 + rpm * 14, t, 0.2);
+      this.roadG.gain.setTargetAtTime(Math.min(0.05, level * level * 0.06), t, 0.3);
     }
-    this.sirG.gain.setTargetAtTime(siren ? 0.035 : 0, t, 0.2);
+    this.sirG.gain.setTargetAtTime(siren ? 0.022 : 0, t, 0.2);
     if (siren) this.sir.frequency.setValueAtTime(Math.sin(t * 4) > 0 ? 960 : 720, t);
   }
 

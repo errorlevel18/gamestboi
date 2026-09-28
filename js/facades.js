@@ -208,6 +208,7 @@ SB.buildFacadeAtlas = function (THREE) {
 const CW = 256, CHh = 32, AS = 1024, COLS = AS / CW, ROWS = AS / CHh;
 const SIGN_STYLE = {
   street: { bg: '#f4f1e8', fg: '#1a1a1a', border: '#1b2a4a' },
+  bus: { bg: '#c62828', fg: '#fff', prefix: 'BUS · ' },
   pharmacy: { bg: '#1e8e3e', fg: '#fff', prefix: '✚ ' },
   bank: { bg: '#1f4f8b', fg: '#fff' },
   bar: { bg: '#7b3f00', fg: '#ffe9c2' }, pub: { bg: '#4a2a0a', fg: '#ffd27a' }, cafe: { bg: '#6d4c41', fg: '#fff' },

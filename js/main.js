@@ -70,6 +70,7 @@ function start() {
     try { pref = localStorage.getItem('santboi-view') || '3d'; } catch (e) { /* nada */ }
     game.setView(pref === '3d');
     game.audio.unlock();
+    try { applySound(parseInt(localStorage.getItem('santboi-sound') || '0', 10) || 0); } catch (e) { /* nada */ }
     $('title').style.display = 'none';
     $('hud').classList.add('on');
     if (matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window) $('touch').classList.add('on');
@@ -97,7 +98,20 @@ addEventListener('keydown', (e) => {
 addEventListener('keyup', (e) => { if (game) game.keys[e.code] = false; });
 addEventListener('blur', () => { if (game) { game.keys = {}; game.paused = true; } });
 addEventListener('resize', () => { if (game) game.resize(); });
-$('mute').onclick = () => { if (game) $('mute').textContent = game.audio.toggleMute() ? '🔇' : '🔊'; };
+// sonido: todo -> sin motor -> silencio (se recuerda entre partidas)
+const SOUND_ICONS = ['🔊', '🔉', '🔇'], SOUND_TIPS = ['Sonido: todo', 'Sonido: sin motor', 'Sonido: silencio'];
+function applySound(mode) {
+  if (!game) return;
+  while ((game.audio.mode || 0) !== mode) game.audio.cycleMode();
+  $('mute').textContent = SOUND_ICONS[mode]; $('mute').title = SOUND_TIPS[mode];
+}
+$('mute').onclick = () => {
+  if (!game) return;
+  const mode = game.audio.cycleMode();
+  $('mute').textContent = SOUND_ICONS[mode]; $('mute').title = SOUND_TIPS[mode];
+  game.msg(SOUND_TIPS[mode], 1.5);
+  try { localStorage.setItem('santboi-sound', String(mode)); } catch (e) { /* nada */ }
+};
 
 // ---------- controles táctiles ----------
 const stick = $('stick'), knob = $('knob');

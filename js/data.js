@@ -12,7 +12,7 @@ const MIRRORS = [
   'https://overpass.private.coffee/api/interpreter',
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ];
-const CACHE_KEY = 'santboi-map-v4';
+const CACHE_KEY = 'santboi-map-v5';
 
 function buildQuery(b) {
   const bb = `${b.s},${b.w},${b.n},${b.e}`;
@@ -40,8 +40,12 @@ function buildQuery(b) {
   node["name"]["shop"](${bb});
   way["name"]["shop"](${bb});
   node["name"]["amenity"~"^(bar|restaurant|cafe|pharmacy|bank|fast_food|pub|ice_cream|post_office|fuel|clinic|dentist|veterinary|driving_school|kindergarten|school)$"](${bb});
+  node["highway"~"^(traffic_signals|crossing|bus_stop|street_lamp)$"](${bb});
+  node["amenity"~"^(bench|fountain|drinking_water|waste_basket|recycling|waste_disposal|post_box)$"](${bb});
 );
-out geom;`;
+out geom;
+relation["route"="bus"](${bb});
+out geom(${bb});`;
 }
 
 // ---------- Proyección lat/lon -> metros ----------
@@ -63,6 +67,45 @@ const ROAD_RANK = { footway: 0, path: 0, cycleway: 0, steps: 0, track: 0, bridle
   pedestrian: 2, living_street: 2, residential: 3, unclassified: 3, road: 3, tertiary_link: 3,
   secondary_link: 3, primary_link: 3, trunk_link: 3, motorway_link: 3, tertiary: 4, secondary: 5,
   primary: 6, trunk: 7, motorway: 8 };
+
+const FURNITURE = { bench: 'bench', fountain: 'fountain', drinking_water: 'fountain', waste_basket: 'bin', recycling: 'recycle',
+  waste_disposal: 'recycle', post_box: 'postbox' };
+
+// Ruta de bus: une los tramos (recortados al área) en una polilínea y guarda las paradas
+function busRoute(el) {
+  const t = el.tags || {};
+  const segs = [];
+  for (const m of el.members || []) {
+    if (m.type !== 'way' || !m.geometry || (m.role && m.role !== 'forward' && m.role !== 'backward')) continue;
+    let cur = [];
+    for (const g of m.geometry) {
+      if (!g || g.lat == null) { if (cur.length > 1) segs.push(cur); cur = []; continue; }
+      cur.push([px(g.lon), py(g.lat)]);
+    }
+    if (cur.length > 1) segs.push(cur);
+  }
+  if (!segs.length) return null;
+  // encadenamos los tramos en el orden de la relación, dándoles la vuelta si hace falta
+  const near = (a, b) => Math.abs(a[0] - b[0]) < 0.5 && Math.abs(a[1] - b[1]) < 0.5;
+  const chains = [];
+  let chain = segs[0].slice();
+  for (let i = 1; i < segs.length; i++) {
+    const sg = segs[i], end = chain[chain.length - 1];
+    if (near(end, sg[0])) chain.push(...sg.slice(1));
+    else if (near(end, sg[sg.length - 1])) chain.push(...sg.slice().reverse().slice(1));
+    else if (i === 1 && (near(chain[0], sg[0]) || near(chain[0], sg[sg.length - 1]))) {
+      chain.reverse();
+      chain.push(...(near(chain[chain.length - 1], sg[0]) ? sg.slice(1) : sg.slice().reverse().slice(1)));
+    } else { chains.push(chain); chain = sg.slice(); }
+  }
+  chains.push(chain);
+  let best = chains[0], bl = 0;
+  for (const c of chains) { let l = 0; for (let i = 1; i < c.length; i++) l += Math.hypot(c[i][0] - c[i - 1][0], c[i][1] - c[i - 1][1]); if (l > bl) { bl = l; best = c; } }
+  if (bl < 300) return null;
+  const stops = [];
+  for (const m of el.members || []) if (m.type === 'node' && m.lat != null && /stop|platform/.test(m.role || '')) stops.push([px(m.lon), py(m.lat)]);
+  return { ref: t.ref || '', name: t.name || '', colour: t.colour || '', pts: [].concat(...best), stops };
+}
 
 // 0 = hoja ancha, 1 = pino, 2 = palmera, 4 = frutal
 function treeType(t) {
@@ -158,18 +201,30 @@ function assembleRings(members) {
 
 // Convierte la respuesta de Overpass en el formato interno del juego
 SB.processOSM = function (osm) {
-  const map = { roads: [], buildings: [], areas: [], waterLines: [], rails: [], pois: [], places: [], bh: [], bk: [], shops: [], trees: [], source: 'osm' };
+  const map = { roads: [], buildings: [], areas: [], waterLines: [], rails: [], pois: [], places: [], bh: [], bk: [], shops: [], trees: [], source: 'osm',
+    signals: [], crossNodes: [], crossWays: [], busStops: [], lamps: [], furniture: [], busRoutes: [] };
   const parts = [];
   const centroid = (pts) => { let cx = 0, cy = 0; const n = pts.length / 2; for (let i = 0; i < pts.length; i += 2) { cx += pts[i]; cy += pts[i + 1]; } return [cx / n, cy / n]; };
   for (const el of osm.elements || []) {
     const t = el.tags || {};
     if (el.type === 'node') {
       if (t.natural === 'tree') { map.trees.push(px(el.lon), py(el.lat), treeType(t)); continue; }
+      const X = px(el.lon), Yv = py(el.lat);
+      if (t.highway === 'traffic_signals') { map.signals.push(X, Yv); continue; }
+      if (t.highway === 'crossing') { map.crossNodes.push(X, Yv); continue; }
+      if (t.highway === 'bus_stop') { map.busStops.push({ x: X, y: Yv, name: t.name || '' }); continue; }
+      if (t.highway === 'street_lamp') { map.lamps.push(X, Yv); continue; }
+      if (FURNITURE[t.amenity]) { map.furniture.push({ x: X, y: Yv, k: FURNITURE[t.amenity] }); continue; }
       if (!t.name) continue;
       if (t.place) { map.places.push({ x: px(el.lon), y: py(el.lat), name: t.name, big: t.place === 'town' }); continue; }
       if (t.shop || SHOP_AMENITIES.has(t.amenity)) { map.shops.push({ x: px(el.lon), y: py(el.lat), name: t.name, kind: t.shop ? shopKind(t.shop) : t.amenity }); continue; }
       let kind = t.amenity || (t.railway === 'station' ? 'station' : t.tourism) || 'poi';
       map.pois.push({ x: px(el.lon), y: py(el.lat), name: t.name, kind });
+      continue;
+    }
+    if (el.type === 'relation' && t.route === 'bus') {
+      const r = busRoute(el);
+      if (r) map.busRoutes.push(r);
       continue;
     }
     if (el.type === 'relation') {
@@ -183,6 +238,7 @@ SB.processOSM = function (osm) {
     const pts = geomToFlat(el.geometry);
     const closed = el.nodes && el.nodes.length > 3 && el.nodes[0] === el.nodes[el.nodes.length - 1];
 
+    if (t.highway && t.footway === 'crossing') map.crossWays.push(pts);
     if (t.highway) {
       const type = t.highway;
       if (!(type in ROAD_W)) continue;

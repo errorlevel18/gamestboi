@@ -43,6 +43,14 @@ En el móvil salen un joystick y unos botones táctiles.
   sitio, como pino, palmera o árbol de hoja según la especie. Los parques, pinares, zonas de matorral, césped,
   huertos y cementerios se rellenan con la vegetación que les toca, sin tapar los caminos, y los parques infantiles
   tienen su color. Los troncos tienen colisión.
+- **Relieve real:** el terreno tiene las cuestas de verdad (datos de elevación abiertos de AWS Terrain Tiles,
+  incluidos en el juego). Los coches suben más despacio y bajan más rápido.
+- **Ciudad viva:** semáforos de OSM que funcionan (el tráfico para en rojo), pasos de cebra, farolas,
+  bancos, fuentes, contenedores, buzones, marquesinas con el nombre de la parada, autobuses que hacen
+  las rutas reales de sus líneas parando en las paradas, y el tren de FGC yendo y viniendo por la vía
+  con parada en la estación. Si OSM apenas tiene farolas en la zona, se colocan a lo largo de las calles.
+- **Modelos 3D:** coches con silueta real (compacto, berlina, furgoneta, deportivo, taxi, patrulla, bus),
+  ruedas que giran, y personas articuladas que andan y corren.
 - **Fachadas variadas:** ladrillo visto, balcones, persianas, bajos con tiendas o persianas metálicas con grafitis,
   naves industriales, iglesias de piedra y colegios, según el tipo de edificio en OSM. La altura sale de las plantas
   (`building:levels`) del edificio o de sus partes del Catastro.
@@ -62,6 +70,9 @@ botón **Cargar JSON de Overpass** de la pantalla de inicio.
 ## Estructura
 
 - `js/data.js`: descarga y procesa los datos de OpenStreetMap y genera el mapa de reserva.
+- `js/terrain.js` y `js/elevation-data.js`: relieve del terreno.
+- `js/city.js`: mobiliario urbano, semáforos, pasos de cebra, autobuses y tren.
+- `js/models.js`: modelos 3D de coches, autobuses, tren y personas.
 - `js/facades.js`: texturas procedurales de fachadas y atlas de textos para placas y letreros.
 - `js/render3d.js`: vista 3D con Three.js (edificios extruidos, árboles, coches, peatones y cámara de persecución).
 - `js/vendor/three.min.js`: Three.js r149 (licencia MIT).

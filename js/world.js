@@ -32,12 +32,13 @@ class World {
     this.buildIndex();
     this.buildTrees();
     this.buildGraph();
+    this.city = new SB.City(this);
   }
 
   tileBucket(tx, ty) {
     const k = key(tx, ty);
     let b = this.tileFeatures.get(k);
-    if (!b) { b = { roads: [], buildings: [], areas: [], waterLines: [], rails: [], trees: [] }; this.tileFeatures.set(k, b); }
+    if (!b) { b = { roads: [], buildings: [], areas: [], waterLines: [], rails: [], trees: [], props: [], cross: [] }; this.tileFeatures.set(k, b); }
     return b;
   }
   insertTiles(bb, margin, list, item) {
@@ -283,6 +284,15 @@ class World {
           res.hit = true; res.nx = nx; res.ny = ny; res.depth = Math.max(res.depth, depth);
           moved = true;
         }
+        const pl = this.city && this.city.propGrid.get(key(i, j));
+        if (pl) for (const pr of pl) {
+          const dx = res.x - pr.x, dy = res.y - pr.y, d = Math.hypot(dx, dy);
+          if (d >= r + pr.r) continue;
+          const nx = dx / (d || 1), ny = dy / (d || 1), depth = r + pr.r - d;
+          res.x += nx * (depth + 0.01); res.y += ny * (depth + 0.01);
+          res.hit = true; res.nx = nx; res.ny = ny; res.depth = Math.max(res.depth, depth);
+          moved = true;
+        }
         const tl = this.treeGrid && this.treeGrid.get(key(i, j)); if (!tl) continue;
         const T = this.trees;
         for (const ti of tl) {
@@ -409,7 +419,8 @@ class World {
       g.strokeStyle = '#3c3c3c'; g.lineWidth = 0.25;
       g.save(); g.lineWidth = 1.7; g.stroke(); g.lineWidth = 1.3; g.strokeStyle = '#7d705f'; g.stroke(); g.restore();
     }
-    if (groundOnly) { this.drawCrossings && this.drawCrossings(g, f); return c; }
+    for (const cr of f.cross) SB.City.drawCrossing(g, cr);
+    if (groundOnly) return c;
     // edificios: sombra y tejado
     g.fillStyle = 'rgba(0,0,0,.28)';
     for (const b of f.buildings) {
@@ -422,6 +433,16 @@ class World {
       g.strokeStyle = 'rgba(40,30,25,.45)'; g.lineWidth = 0.35; g.stroke();
       g.strokeStyle = 'rgba(255,255,255,.12)'; g.lineWidth = 1.2;
       g.save(); g.clip(); g.stroke(); g.restore();
+    }
+    // mobiliario urbano visto desde arriba
+    for (const pr of f.props) {
+      g.save(); g.translate(pr.x, pr.y); g.rotate(pr.a || 0);
+      if (pr.k === 'lamp') { g.fillStyle = '#9aa0a6'; g.fillRect(0, -0.1, 1.4, 0.2); g.fillStyle = '#34383d'; g.beginPath(); g.arc(0, 0, 0.25, 0, TAU2); g.fill(); }
+      else if (pr.k === 'bench') { g.fillStyle = '#8b5a2b'; g.fillRect(-0.9, -0.25, 1.8, 0.5); }
+      else if (pr.k === 'recycle') { const cols = ['#2e7d32', '#f9c80e', '#1565c0', '#6d4c41']; cols.forEach((cc, k) => { g.fillStyle = cc; g.fillRect(-3.4 + k * 1.7, -0.6, 1.6, 1.2); }); }
+      else if (pr.k === 'busstop') { g.rotate((pr.face || 0) - (pr.a || 0)); g.fillStyle = 'rgba(160,200,215,.9)'; g.fillRect(-0.8, -2, 1.6, 4); g.strokeStyle = '#333'; g.lineWidth = 0.15; g.strokeRect(-0.8, -2, 1.6, 4); }
+      else { g.fillStyle = pr.k === 'postbox' ? '#f6c90e' : pr.k === 'fountain' ? '#2f4f3a' : '#3e4a3d'; g.fillRect(-0.3, -0.3, 0.6, 0.6); }
+      g.restore();
     }
     // árboles vistos desde arriba
     const T = this.trees;

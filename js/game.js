@@ -17,6 +17,7 @@ const MODELS = [
   { name: 'Deportivo', max: 54, acc: 16, turn: 2.9, l: 4.4, w: 1.95, weight: 8, sport: true, colors: ['#e74c3c', '#f39c12', '#16a085', '#2c3e50', '#f1c40f'] },
   { name: 'Moto', max: 46, acc: 14, turn: 3.2, l: 2.2, w: 0.8, weight: 6, bike: true, colors: ['#c0392b', '#111', '#2471a3'] },
 ];
+const BUS = { name: 'Autobús', max: 17, acc: 4.5, turn: 1.5, l: 12, w: 2.55, bus: true, colors: ['#d8262f'] };
 const POLICE = { name: 'Policía', max: 50, acc: 13, turn: 2.8, l: 4.7, w: 1.95, police: true, colors: ['#f4f6f7'] };
 const SHIRTS = ['#c0392b', '#2980b9', '#27ae60', '#8e44ad', '#f39c12', '#16a085', '#ecf0f1', '#34495e', '#e67e22', '#d35400', '#7f8c8d', '#f5b7b1'];
 const HAIR = ['#2c1e14', '#4a3222', '#0f0f0f', '#8a6b3d', '#c9b37e', '#9a9a9a', '#6b2d16'];
@@ -286,12 +287,14 @@ class Game {
       if (this.dead.t <= 0) this.respawn();
     } else this.updatePlayer(dt);
 
+    if (this.w.city) this.w.city.update(this, dt);
     for (const c of this.cars) {
       let inp = { thr: 0, steer: 0, hb: false };
       if (c.dead) inp.hb = true;
       else if (c.driver === 'player') inp = this.playerInput;
       else if (c.driver === 'ai') inp = this.aiDrive(c, dt);
       else if (c.driver === 'cop') inp = this.copDrive(c, dt);
+      else if (c.driver === 'bus') inp = this.busDrive(c, dt);
       else inp.hb = !c.dead && Math.hypot(c.vx, c.vy) < 3;
       this.stepCar(c, inp, dt);
       this.carDamage(c, dt);
@@ -305,7 +308,8 @@ class Game {
     this.updateParticles(dt);
     this.updateCamera(dt);
     this.audio.engine(this.player.car && !this.dead ? Math.hypot(this.player.car.vx, this.player.car.vy) / this.player.car.m.max : -1,
-      this.stars > 0 && this.cars.some(c => c.m.police && !c.dead && dist(c, this.pos()) < 120));
+      this.stars > 0 && this.cars.some(c => c.m.police && !c.dead && dist(c, this.pos()) < 120),
+      this.playerInput ? this.playerInput.thr : 0);
     this.pressed = {};
   }
 
@@ -373,7 +377,7 @@ class Game {
     }
     if (!best) return;
     const c = best;
-    if (c.driver === 'ai' || c.driver === 'cop') {
+    if (c.driver === 'ai' || c.driver === 'cop' || c.driver === 'bus') {
       // sacamos al conductor
       const ex = c.x - Math.sin(c.a) * (c.m.w / 2 + 0.8), ey = c.y + Math.cos(c.a) * (c.m.w / 2 + 0.8);
       const n = this.w.nearestNode(ex, ey, true);
@@ -547,7 +551,9 @@ class Game {
         if (Math.abs(a.x - b.x) > lim || Math.abs(a.y - b.y) > lim) continue;
         const ra = a.m.w / 2, rb = b.m.w / 2, ha = Math.max(0, a.m.l / 2 - ra), hb = Math.max(0, b.m.l / 2 - rb);
         let hit = null, best = 0;
-        for (const sa of [-1, 0, 1]) for (const sb of [-1, 0, 1]) {
+        const na = a.m.l > 6 ? 5 : 1, nb = b.m.l > 6 ? 5 : 1;
+        for (let ia = -na; ia <= na; ia++) for (let ib = -nb; ib <= nb; ib++) {
+          const sa = ia / na, sb = ib / nb;
           const ax = a.x + Math.cos(a.a) * ha * sa, ay = a.y + Math.sin(a.a) * ha * sa;
           const bx = b.x + Math.cos(b.a) * hb * sb, by = b.y + Math.sin(b.a) * hb * sb;
           const d = Math.hypot(bx - ax, by - ay), pen = ra + rb - d;
@@ -617,16 +623,72 @@ class Game {
       if (!ai.next) { c.driver = null; c.parked = true; return { thr: -1, steer: 0, hb: true }; }
       ai.from = ai.to; ai.to = ai.next.to; ai.road = ai.next.r; ai.next = null;
     }
-    // obstáculos delante
-    const ca = Math.cos(c.a), sa = Math.sin(c.a);
-    const P = this.pos();
+    // semáforos en rojo o ámbar: paramos antes del cruce
+    const city = this.w.city;
+    if (city && city.sigNodes.size && !ai.patrol) {
+      const sd = city.stopDistance(c, ai, L - t, this.time);
+      if (sd < 45) target = Math.min(target, Math.max(0, (sd - 5) * 0.8));
+    }
+    target = this.obstacleCap(c, target);
+    return this.driveTo(c, gx, gy, target, dt);
+  }
+
+  // Frena si hay coches, peatones o el jugador delante
+  obstacleCap(c, target) {
+    const ca = Math.cos(c.a), sa = Math.sin(c.a), P = this.pos(), reach = c.m.l / 2 + 12, gap = c.m.l / 2 + 3;
     const check = (o, lat) => {
       const ox = o.x - c.x, oy = o.y - c.y, fwd = ox * ca + oy * sa, side = -ox * sa + oy * ca;
-      if (fwd > 0 && fwd < 14 && Math.abs(side) < lat) target = Math.min(target, Math.max(0, (fwd - 5) * 0.9));
+      if (fwd > 0 && fwd < reach && Math.abs(side) < lat) target = Math.min(target, Math.max(0, (fwd - gap) * 0.9));
     };
-    for (const o of this.cars) if (o !== c && Math.abs(o.x - c.x) < 15 && Math.abs(o.y - c.y) < 15) check(o, 1.9);
+    for (const o of this.cars) if (o !== c && Math.abs(o.x - c.x) < reach + 6 && Math.abs(o.y - c.y) < reach + 6) check(o, 1.9 + (o.m.w - 1.9) / 2);
     if (!this.player.car) check(P, 1.6);
     for (const q of this.peds) if (q.state !== 'dead' && Math.abs(q.x - c.x) < 12 && Math.abs(q.y - c.y) < 12) check(q, 1.3);
+    return target;
+  }
+
+  // ---------- autobuses: siguen la ruta real de su línea y paran en las paradas ----------
+  spawnBus() {
+    const city = this.w.city; if (!city || !city.routes.length) return;
+    const P0 = this.pos();
+    for (let tries = 0; tries < 12; tries++) {
+      const ri = Math.floor(Math.random() * city.routes.length), R = city.routes[ri];
+      const s0 = Math.random() * R.path.len * 0.85, q = R.path.at(s0);
+      const d = Math.hypot(q.x - P0.x, q.y - P0.y);
+      if (d < 130 || d > 380) continue;
+      if (this.cars.some(o => o.bus && o.bus.r === ri && Math.abs(o.bus.s - s0) < 80)) continue;
+      const x = q.x - Math.sin(q.a) * 1.7, y = q.y + Math.cos(q.a) * 1.7;
+      if (!this.freeSpot(x, y, 14) || this.w.isInsideBuilding(x, y)) continue;
+      const c = this.makeCar(BUS, x, y, q.a);
+      c.driver = 'bus';
+      let stopI = R.stops.findIndex(v => v > s0 + 5); if (stopI < 0) stopI = R.stops.length;
+      c.bus = { r: ri, s: s0, stopI, wait: 0 };
+      c.vx = Math.cos(q.a) * 6; c.vy = Math.sin(q.a) * 6;
+      this.cars.push(c);
+      return;
+    }
+  }
+
+  busDrive(c, dt) {
+    const b = c.bus, R = this.w.city.routes[b.r], P = R.path;
+    // avanzamos la posición en la ruta buscando el punto más cercano un poco por delante
+    let bs = b.s, bd = Infinity;
+    for (let s = b.s - 4; s <= b.s + 30; s += 1.5) { const q = P.at(s); const d = (q.x - c.x) ** 2 + (q.y - c.y) ** 2; if (d < bd) { bd = d; bs = s; } }
+    b.s = Math.max(b.s, bs);
+    if (b.wait > 0) { b.wait -= dt; return { thr: 0, steer: 0, hb: true }; }
+    if (b.s > P.len - 15) { c.driver = null; c.parked = true; return { thr: 0, steer: 0, hb: true }; }
+    const look = P.at(b.s + 9), ahead = P.at(b.s + 24);
+    const gx = look.x - Math.sin(look.a) * 1.7, gy = look.y + Math.cos(look.a) * 1.7;
+    let target = 11;
+    const turn = Math.abs(angDiff(look.a, ahead.a));
+    if (turn > 0.3) target = Math.max(4, 11 - turn * 6);
+    if (b.stopI < R.stops.length) {
+      const ds = R.stops[b.stopI] - b.s;
+      if (ds < 30) target = Math.min(target, Math.max(0, (ds - 1) * 0.6));
+      const sp = Math.hypot(c.vx, c.vy);
+      if (ds < 3 && sp < 1) { b.wait = 7; b.stopI++; }
+      else if (ds < -5) b.stopI++;
+    }
+    target = this.obstacleCap(c, target);
     return this.driveTo(c, gx, gy, target, dt);
   }
 
@@ -637,7 +699,7 @@ class Game {
     const sp = Math.abs(vf);
     // atascado: marcha atrás
     if (c.rev > 0) { c.rev -= dt; return { thr: -1, steer: -Math.sign(d), hb: false }; }
-    if (sp < 1 && target > 3) { c.stuck += dt; if (c.stuck > 1.5) { c.stuck = 0; c.rev = 1.2; } } else c.stuck = Math.max(0, c.stuck - dt);
+    if (sp < 1 && target > 3) { c.stuck += dt; if (c.stuck > 1.5) { c.stuck = 0; c.rev = 1.2; c.stuckN = (c.stuckN || 0) + 1; } } else { c.stuck = Math.max(0, c.stuck - dt); if (sp > 5) c.stuckN = 0; }
     if (Math.abs(d) > 1.3) target = Math.min(target, 7);
     let thr = sp < target - 0.5 ? 1 : sp > target + 1.5 ? -1 : 0;
     if (target < 0.5 && sp < 1) thr = 0;
@@ -914,10 +976,15 @@ class Game {
       if (c === this.player.car || c.mission) return true;
       const d = dist(c, P);
       if (c.m.police && c.driver === 'cop') return d < (this.stars ? 500 : 300);
+      // vehículos que llevan rato atascados: se retiran si no los estás mirando de cerca
+      if ((c.driver === 'ai' || c.driver === 'bus') && c.stuckN >= 4 && d > 60) return false;
       if (c.driver === 'ai') return d < 300;
+      if (c.driver === 'bus') return d < 450;
       return d < 420;
     });
     this.peds = this.peds.filter(q => { const d = dist(q, P); return q.state === 'dead' ? q.t < 30 && d < 250 : d < 190; });
+    const buses = this.cars.filter(c => c.driver === 'bus').length;
+    if (buses < 3 && Math.random() < 0.03) this.spawnBus();
     const civ = this.cars.filter(c => c.driver === 'ai').length;
     if (civ < 22) this.spawnTraffic(130, 260);
     const parked = this.cars.filter(c => !c.driver && !c.dead && dist(c, P) < 220).length;
@@ -1031,7 +1098,8 @@ class Game {
     if (!this.player.car && !this.dead) this.drawPed(g, this.player, true);
     else if (this.dead && !this.player.car && this.dead.kind === 'wasted') this.drawPed(g, { ...this.player, state: 'dead' }, true);
     // coches
-    for (const c of this.cars) if (vis(c, 5)) this.drawCar(g, c);
+    for (const c of this.cars) if (vis(c, 8)) this.drawCar(g, c);
+    if (this.w.city) this.w.city.draw2D(g, this, vis);
     // balas
     g.strokeStyle = '#ffe680'; g.lineWidth = 0.15;
     g.beginPath();
