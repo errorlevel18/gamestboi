@@ -317,6 +317,7 @@ class Game {
     if (this.pressed.KeyC || this.pressed.KeyV) this.setView(!this.view3d);
     if (this.pressed.KeyI) this.showInfo();
     if (this.pressed.KeyP || this.pressed.Escape) this.paused = !this.paused;
+    if (this.music && this.music.on && this._musicPaused !== this.paused) { this._musicPaused = this.paused; this.music.setLevel(this.paused ? 0.35 : 1.0); }
     if (this.paused) { this.pressed = {}; return; }
 
     if (this.dead) {

@@ -93,6 +93,11 @@ function start() {
     game.setView(pref === '3d');
     game.audio.unlock();
     try { applySound(parseInt(localStorage.getItem('santboi-sound') || '0', 10) || 0); } catch (e) { /* nada */ }
+    // música de fondo (activada por defecto; se recuerda si la apagas)
+    game.music = new SB.Music(game.audio);
+    let musicOn = true;
+    try { musicOn = localStorage.getItem('santboi-music') !== 'off'; } catch (e) { /* nada */ }
+    setMusic(musicOn, false);
     $('title').style.display = 'none';
     $('hud').classList.add('on');
     if (matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window) $('touch').classList.add('on');
@@ -112,6 +117,7 @@ function start() {
 // ---------- teclado ----------
 addEventListener('keydown', (e) => {
   if (!game) { if (e.code === 'Enter' && !playBtn.disabled) start(); return; }
+  if (e.code === 'KeyN' && !e.repeat && game.music) setMusic(!game.music.on, true);
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   if (!e.repeat) game.pressed[e.code] = true;
   game.keys[e.code] = true;
@@ -159,6 +165,16 @@ hold($('tMap'), () => { game.pressed.KeyM = true; });
 hold($('tCam'), () => { game.pressed.KeyC = true; });
 $('cam').onclick = () => { if (game) game.pressed.KeyC = true; };
 $('infoBtn').onclick = () => { if (game) game.showInfo(); };
+function setMusic(on, announce) {
+  if (!game || !game.music) return;
+  if (on) game.music.start(); else game.music.stop();
+  $('musicBtn').textContent = on ? '🎵' : '🎵̸';
+  $('musicBtn').style.opacity = on ? '1' : '0.45';
+  $('musicBtn').title = on ? 'Música: sí (N)' : 'Música: no (N)';
+  if (announce) game.msg(on ? 'Música activada' : 'Música desactivada', 1.5);
+  try { localStorage.setItem('santboi-music', on ? 'on' : 'off'); } catch (e) { /* nada */ }
+}
+$('musicBtn').onclick = () => { if (game && game.music) setMusic(!game.music.on, true); };
 $('infoClose').onclick = () => { $('info').style.display = 'none'; };
 
 load(false);

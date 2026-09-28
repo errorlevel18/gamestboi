@@ -28,6 +28,7 @@ veces arranca al momento. Si no hay conexión, puedes jugar con un mapa aproxima
 | Claxon | `H` |
 | Cambiar cámara 3D / desde arriba | `C` |
 | ¿Qué hay aquí en OpenStreetMap? | `I` (o botón ℹ️) |
+| Música on/off | `N` (o botón 🎵) |
 | Mapa completo | `M` |
 | Pausa | `P` o `Esc` |
 

@@ -12,7 +12,7 @@ const MIRRORS = [
   'https://overpass.private.coffee/api/interpreter',
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ];
-const CACHE_KEY = 'santboi-map-v6';   // mapa ya procesado (cambia cuando cambia cómo se interpreta)
+const CACHE_KEY = 'santboi-map-v7';   // mapa ya procesado (cambia cuando cambia cómo se interpreta)
 const RAW_KEY = 'santboi-raw-v1';     // datos en bruto de Overpass (sólo cambia si cambian las consultas)
 
 // La descarga se hace por partes: consultas pequeñas que el servidor no corta por tiempo.
@@ -284,11 +284,18 @@ SB.processOSM = function (osm) {
       if (t.building === 'no' || t.building === 'demolished' || t.building === 'razed' || t.building === 'proposed') continue;
       let kind = buildingKind(t);
       const h = buildingHeight(t), area = polyArea(pts);
-      // sin datos de tipo ni de plantas: lo pequeño es una casa y lo mediano un bloque bajo
+      // fragmentos minúsculos de la importación del Catastro (columnas de "4,5 plantas" de 3 m²)
+      if (area < 6) continue;
       let guessed = false;
       if (!kind && !h) {
+        // sin datos de tipo ni de plantas: lo pequeño es una casa y lo mediano un bloque bajo
         if (area < 170) { kind = 'house'; guessed = true; }
         else if (area < 360) { kind = 'lowres'; guessed = true; }
+      } else if (!kind && h && h <= 12) {
+        // el Catastro trocea cada casa en piezas con sus plantas: hasta 3 plantas y tamaño de casa = casa
+        if (area < 25) { kind = 'shed'; guessed = true; }
+        else if (area < 250) { kind = 'house'; guessed = true; }
+        else { kind = 'lowres'; guessed = true; }
       }
       map.buildings.push(pts);
       map.bh.push(h);
