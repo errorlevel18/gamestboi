@@ -1,5 +1,5 @@
 {
- "date": "2026-11-02T12:33:20.732Z",
+ "date": "2026-11-09T12:58:23.059Z",
  "bbox": {
   "s": 41.3265,
   "w": 2.013,
@@ -10,7 +10,7 @@
  "parts": {
   "roads": {
    "elements": 4248,
-   "bytes": 2001542
+   "bytes": 2001677
   },
   "buildings": {
    "elements": 23750,
@@ -18,11 +18,11 @@
   },
   "nature": {
    "elements": 1714,
-   "bytes": 853527
+   "bytes": 853598
   },
   "places": {
-   "elements": 4078,
-   "bytes": 874452
+   "elements": 4079,
+   "bytes": 874665
   },
   "bus": {
    "elements": 87,
